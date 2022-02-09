@@ -5,6 +5,7 @@
 *.so
 *.dylib
 bin
+extensions
 
 # Test binary, built with `go test -c`
 *.test
@@ -16,3 +17,4 @@ bin
 # vendor/
 .DS_Store
 ./web/.DS_Store
+dist/
