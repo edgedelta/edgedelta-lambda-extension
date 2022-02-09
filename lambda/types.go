@@ -64,7 +64,9 @@ type SubEventType string
 
 const (
 	// RuntimeDone event is sent when lambda function is finished it's execution
-	RuntimeDone SubEventType = "platform.runtimeDone"
+	RuntimeDone    SubEventType = "platform.runtimeDone"
+	RuntimeEnd     SubEventType = "platform.end"
+	PlatformReport SubEventType = "platform.report"
 )
 
 // BufferingCfg is the configuration set for receiving logs from Logs API. Whichever of the conditions below is met first, the logs will be sent
@@ -115,9 +117,8 @@ type SubscribeResponse struct {
 
 // Client is the client used to interact with the Lambda API Endpoints
 type Client struct {
-	httpClient  *http.Client
-	baseUrl     string
-	ExtensionID string
+	httpClient *http.Client
+	baseUrl    string
 }
 
 // NewClient returns a Lambda API client

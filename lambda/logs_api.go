@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
-
-	"github.com/edgedelta/edgedelta-lambda-extension/pkg/log"
 )
 
 // Subscribe calls the Logs API to subscribe for the log events.
@@ -36,7 +35,7 @@ func (c *Client) Subscribe(logTypes []string, bufferingCfg BufferingCfg, destina
 	req.Header.Set(extensionIdentiferHeader, extensionId)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		log.Error("Error subscribing to logs api: %v", err)
+		log.Println("Error subscribing to logs api: %v", err)
 		return nil, err
 	}
 
@@ -45,10 +44,10 @@ func (c *Client) Subscribe(logTypes []string, bufferingCfg BufferingCfg, destina
 	if resp.StatusCode != http.StatusOK {
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			log.Error("%s failed: %d[%s]", url, resp.StatusCode, resp.Status)
+			log.Println("%s failed: %d[%s]", url, resp.StatusCode, resp.Status)
 			return nil, err
 		}
-		log.Error("%s failed: %d[%s] %s", url, resp.StatusCode, resp.Status, string(body))
+		log.Println("%s failed: %d[%s] %s", url, resp.StatusCode, resp.Status, string(body))
 		return nil, err
 	}
 

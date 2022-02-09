@@ -3,6 +3,7 @@ package cfg
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -17,45 +18,26 @@ var (
 // Config for storing all parameters
 type Config struct {
 	EDEndpoint     string
-	EnableFailover bool
-	S3BucketName   string
 	LogTypes       []string
 	BfgConfig      *lambda.BufferingCfg
-	LogLevel       string
 	BufferSize     int
 	Parallelism    int
 	RetryTimeout   time.Duration
 	RetryIntervals time.Duration
 }
 
-func GetConfigAndValidate(envs map[string]string) (*Config, error) {
+func GetConfigAndValidate() (*Config, error) {
 
 	config := &Config{
-		EDEndpoint:     envs["ED_ENDPOINT"],
-		S3BucketName:   envs["S3_BUCKET_NAME"],
-		EnableFailover: false,
+		EDEndpoint: os.Getenv("ED_ENDPOINT"),
 	}
+
 	var multiErr []string
 	if config.EDEndpoint == "" {
-		multiErr = append(multiErr, "ED_ENDPOINT must be set as environment variable")
+		return nil, errors.New("ED_ENDPOINT must be set as environment variable")
 	}
 
-	enableFailover := envs["ENABLE_FAILOVER"]
-	var err error
-	if enableFailover != "" {
-		config.EnableFailover, err = strconv.ParseBool(enableFailover)
-		if err != nil {
-			multiErr = append(multiErr, fmt.Sprintf("Unable to parse ENABLE_FAILOVER: %v", err))
-		}
-	}
-
-	if config.EnableFailover {
-		if config.S3BucketName == "" {
-			multiErr = append(multiErr, "S3_BUCKET_NAME must be set as environment variable when failover is enabled")
-		}
-	}
-
-	parallelism := envs["PARALLELISM"]
+	parallelism := os.Getenv("PARALLELISM")
 	if parallelism != "" {
 		if i, err := strconv.ParseInt(parallelism, 10, 0); err == nil {
 			config.Parallelism = int(i)
@@ -66,7 +48,7 @@ func GetConfigAndValidate(envs map[string]string) (*Config, error) {
 		config.Parallelism = 1
 	}
 
-	bufferSize := envs["BUFFER_SIZE"]
+	bufferSize := os.Getenv("BUFFER_SIZE")
 	if bufferSize != "" {
 		if i, err := strconv.ParseInt(bufferSize, 10, 0); err == nil {
 			config.BufferSize = int(i)
@@ -77,7 +59,7 @@ func GetConfigAndValidate(envs map[string]string) (*Config, error) {
 		config.BufferSize = 100
 	}
 
-	retryTimeout := envs["RETRY_TIMEOUT"]
+	retryTimeout := os.Getenv("RETRY_TIMEOUT")
 	if retryTimeout != "" {
 		if i, err := strconv.ParseInt(retryTimeout, 10, 0); err == nil {
 			config.RetryTimeout = time.Duration(i)
@@ -88,7 +70,7 @@ func GetConfigAndValidate(envs map[string]string) (*Config, error) {
 		config.RetryTimeout = 0
 	}
 
-	retryInterval := envs["RETRY_INTERVAL"]
+	retryInterval := os.Getenv("RETRY_INTERVAL")
 	if retryInterval != "" {
 		if i, err := strconv.ParseInt(retryInterval, 10, 0); err == nil {
 			config.RetryIntervals = time.Duration(i)
@@ -99,20 +81,13 @@ func GetConfigAndValidate(envs map[string]string) (*Config, error) {
 		config.RetryIntervals = 0
 	}
 
-	logLevel := envs["LOG_LEVEL"]
-	if logLevel != "" {
-		config.LogLevel = logLevel
-	} else {
-		config.LogLevel = "info"
-	}
-
 	config.BfgConfig = &lambda.BufferingCfg{
 		MaxItems:  1000,
 		MaxBytes:  262144,
 		TimeoutMS: 1000,
 	}
 
-	maxItems := envs["MAX_ITEMS"]
+	maxItems := os.Getenv("MAX_ITEMS")
 	if maxItems != "" {
 		if i, err := strconv.ParseInt(maxItems, 10, 0); err == nil {
 			config.BfgConfig.MaxItems = uint32(i)
@@ -121,7 +96,7 @@ func GetConfigAndValidate(envs map[string]string) (*Config, error) {
 		}
 	}
 
-	maxBytes := envs["MAX_BYTES"]
+	maxBytes := os.Getenv("MAX_BYTES")
 	if maxBytes != "" {
 		if i, err := strconv.ParseInt(maxBytes, 10, 0); err == nil {
 			config.BfgConfig.MaxBytes = uint32(i)
@@ -130,7 +105,7 @@ func GetConfigAndValidate(envs map[string]string) (*Config, error) {
 		}
 	}
 
-	timeoutMs := envs["TIMEOUT_MS"]
+	timeoutMs := os.Getenv("TIMEOUT_MS")
 	if timeoutMs != "" {
 		if i, err := strconv.ParseInt(timeoutMs, 10, 0); err == nil {
 			config.BfgConfig.TimeoutMS = uint32(i)
@@ -139,7 +114,7 @@ func GetConfigAndValidate(envs map[string]string) (*Config, error) {
 		}
 	}
 
-	logTypesStr := envs["LOG_TYPES"]
+	logTypesStr := os.Getenv("LOG_TYPES")
 	if logTypesStr != "" {
 		logTypes := strings.Split(logTypesStr, ",")
 		for _, lg := range logTypes {
@@ -158,6 +133,8 @@ func GetConfigAndValidate(envs map[string]string) (*Config, error) {
 	} else {
 		config.LogTypes = []string{"platform", "function"}
 	}
+
+	var err error
 	if len(multiErr) > 0 {
 		err = errors.New(strings.Join(multiErr, ", "))
 	}

@@ -3,112 +3,101 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path"
 	"syscall"
+	"time"
 
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
 	"github.com/edgedelta/edgedelta-lambda-extension/handlers"
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
-	"github.com/edgedelta/edgedelta-lambda-extension/pkg/env"
-	"github.com/edgedelta/edgedelta-lambda-extension/pkg/log"
 	"github.com/edgedelta/edgedelta-lambda-extension/pushers"
-	"github.com/edgedelta/edgedelta-lambda-extension/pushers/hostedenv"
-	"github.com/edgedelta/edgedelta-lambda-extension/pushers/s3"
 )
 
 var (
+	// Lambda uses the full file name of the extension to validate that the extension has completed the bootstrap sequence.
 	extensionName = path.Base(os.Args[0])
 	lambdaClient  = lambda.NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API"))
+	pusher        *pushers.Pusher
+	runtimeDone   chan struct{}
+	extensionId   string
+	queue         chan []byte
 )
 
-var config *cfg.Config
-var multiPusher *pushers.MultiPusher
-
-func init() {
-	envs := env.GetAllEnvs()
+func startExtension(ctx context.Context, config *cfg.Config) {
 	var err error
-	config, err = cfg.GetConfigAndValidate(envs)
+	extensionId, err = lambdaClient.Register(ctx, extensionName)
 	if err != nil {
-		log.Error("Problem encountered while parsing config, %v", err)
+		log.Printf("Problem encountered while registering to extension, %v", err)
+		os.Exit(1)
 	}
-	log.SetLevelWithName(config.LogLevel)
-}
-
-func bootstrapExtensionsApi(ctx context.Context) {
-	_, err := lambdaClient.Register(ctx, extensionName)
-	if err != nil {
-		panic(err)
-	}
-}
-
-func bootstrapHandlers() {
-	var pArray []pushers.Pusher
-	if config.EnableFailover {
-		s3Pusher, err := s3.NewPusher(config)
-		if err == nil {
-			pArray = append(pArray, s3Pusher)
-		}
-	}
-	hostedPusher, err := hostedenv.NewPusher(config)
-	if err == nil {
-		pArray = append(pArray, hostedPusher)
-	}
-	multiPusher = pushers.NewMultiPusher(pArray)
-	producer := handlers.NewProducer(multiPusher)
+	queue = make(chan []byte, config.BufferSize)
+	producer := handlers.NewProducer(queue)
 	go producer.Start()
 
+	runtimeDone = make(chan struct{})
+	pusher = pushers.NewPusher(config, queue, runtimeDone)
+	pusher.Start()
+
+	// Lambda delivers logs to a local HTTP endpoint (http://sandbox.localdomain:${PORT}/${PATH}) as an array of records in JSON format. The $PATH parameter is optional. Lambda reserves port 9001. There are no other port number restrictions or recommendations.
 	destination := lambda.Destination{
 		Protocol: lambda.HttpProto,
 		URI:      lambda.URI(fmt.Sprintf("http://sandbox:%s", handlers.DefaultHttpListenerPort)),
 	}
 
-	lambdaClient.Subscribe(config.LogTypes, *config.BfgConfig, destination, lambdaClient.ExtensionID)
+	lambdaClient.Subscribe(config.LogTypes, *config.BfgConfig, destination, extensionId)
 }
 
 func main() {
-	log.Debug("starting edgedelta extension")
+	log.Println("starting edgedelta extension")
+	config, err := cfg.GetConfigAndValidate()
+	if err != nil {
+		log.Printf("fatal error while parsing config: %v", err)
+		os.Exit(2)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	sigs := make(chan os.Signal, 1)
+	// todo could not trigger these signals on basic lambda functions -> maybe try with a long polling one
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		s := <-sigs
 		cancel()
-		log.Info("Received signal:", s)
+		log.Println("Received signal:", s)
 	}()
 
-	bootstrapExtensionsApi(ctx)
-	bootstrapHandlers()
-	// Finish init step
-	nextResponse, err := lambdaClient.NextEvent(ctx)
+	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
+	startExtension(ctx, config)
+	// Finish Init() step of the extension and signal the runtime that we are ready to receive logs.
+	_, err = lambdaClient.NextEvent(ctx, extensionId)
 	if err != nil {
-		lambdaClient.InitError(ctx, err.Error())
-		return
+		log.Printf("Problem encountered while getting next event, %v", err)
+		os.Exit(3)
 	}
-	log.Debug("Received EventType: %s", nextResponse.EventType)
-	// The For loop will continue till we recieve a shutdown event.
+	// The For loop will wait for an Invoke or Shutdown event and sleep until one of them comes with Nextevent().
 	for {
 		select {
 		case <-ctx.Done():
-			multiPusher.FlushLogs(true)
-			multiPusher.Stop()
+			pusher.Stop()
 			return
 		default:
-			multiPusher.FlushLogs(false)
-			log.Debug("flushing logs complete for invocation")
-			// This statement will freeze lambda
-			nextResponse, err := lambdaClient.NextEvent(ctx)
+			// This statement signals to lambda that the extension is ready for warm restart and
+			// will work until a timeout occurs or runtime crashes.
+			nextResponse, err := lambdaClient.NextEvent(ctx, extensionId)
 			if err != nil {
-				log.Error("Error during Next Event call: %v", err)
+				log.Printf("Error during Next Event call: %v", err)
 				return
 			}
 			// Next invoke will start from here
-			log.Info("Received Next Event as %s", nextResponse.EventType)
 			if nextResponse.EventType == lambda.Shutdown {
-				multiPusher.FlushLogs(true)
-				multiPusher.Stop()
-				log.Debug("finished edgedelta extension, shutdown received")
+				log.Printf("shutdown received, stopping extension")
+				// Shutdown phase must be max 2 seconds. Leaving some time for the pusher to finish.
+				tCtx, _ := context.WithTimeout(ctx, 1800*time.Millisecond)
+				<-tCtx.Done()
+				log.Printf("shutdown context timeout")
+				pusher.Stop()
 				return
 			}
 		}

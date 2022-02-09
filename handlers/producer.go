@@ -3,10 +3,8 @@ package handlers
 import (
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
-
-	"github.com/edgedelta/edgedelta-lambda-extension/pkg/log"
-	"github.com/edgedelta/edgedelta-lambda-extension/pushers"
 )
 
 // DefaultHttpListenerPort is used to set the URL where the logs will be sent by Logs API
@@ -14,25 +12,25 @@ const DefaultHttpListenerPort = "6060"
 
 // Producer is used to listen to the Logs API using HTTP
 type Producer struct {
-	// multiPusher is used to put the received logs to be consumed.
-	multiPusher *pushers.MultiPusher
+	queue chan []byte
 }
 
-// NewProducer returns a Producer with multipusher
-func NewProducer(mp *pushers.MultiPusher) *Producer {
+func NewProducer(queue chan []byte) *Producer {
 	return &Producer{
-		multiPusher: mp,
+		queue: queue,
 	}
 }
 
 // Start initiates the server where the logs will be sent
+//todo pass ctx here for cancel
 func (pr *Producer) Start() {
 	http.HandleFunc("/", pr.handleLogs)
 	address := fmt.Sprintf("0.0.0.0:%s", DefaultHttpListenerPort)
-	log.Info("Listening to logs api on %s", address)
+	log.Printf("Listening to logs api on %s", address)
 	err := http.ListenAndServe(address, nil)
 	if err != nil {
-		log.Error("Http Server closed, err: %v", err)
+		//todo should not continue from here fatalf maybe
+		log.Printf("Http Server closed, err: %v", err)
 	}
 }
 
@@ -44,9 +42,9 @@ func (pr *Producer) Start() {
 func (pr *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		log.Error("Error reading body: %+v", err)
+		log.Printf("Error reading body: %+v", err)
 		return
 	}
 	// Puts the log message into the queue
-	pr.multiPusher.Push(body)
+	pr.queue <- body
 }
