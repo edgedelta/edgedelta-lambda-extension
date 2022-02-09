@@ -19,17 +19,18 @@ archives:
     wrap_in_directory: "true"
     files:
       - dist/{{ .ProjectName }}_v{{ .Version }}
-    name_template: "extensions"
+    name_template: 'extensions'
   - format: tar.gz
     id: "tar.gz"
-    wrap_in_directory: "extensions"
+    wrap_in_directory: 'extensions'
     files:
       - dist/{{ .ProjectName }}_v{{ .Version }}
-    name_template: "extensions"
+    name_template: 'extensions'
   - format: binary
     id: "binary"
     files:
       - dist/{{ .ProjectName }}_v{{ .Version }}
+    name_template: '{{ .ProjectName }}_v{{ .Version }}'
 checksum:
    name_template: '{{ .ProjectName }}_v{{ .Version }}_SHA256SUMS'
    algorithm: sha256
