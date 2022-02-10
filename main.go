@@ -39,7 +39,7 @@ func startExtension(ctx context.Context, config *cfg.Config) {
 
 	runtimeDone = make(chan struct{})
 	pusher = pushers.NewPusher(config, queue, runtimeDone)
-	pusher.Start()
+	pusher.Start(ctx)
 
 	// Lambda delivers logs to a local HTTP endpoint (http://sandbox.localdomain:${PORT}/${PATH}) as an array of records in JSON format. The $PATH parameter is optional. Lambda reserves port 9001. There are no other port number restrictions or recommendations.
 	destination := lambda.Destination{
@@ -80,7 +80,7 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
-			pusher.Stop()
+			log.Printf("Shutting down Edge Delta extension, context done.")
 			return
 		default:
 			// This statement signals to lambda that the extension is ready for warm restart and
@@ -96,9 +96,7 @@ func main() {
 				// Shutdown phase must be max 2 seconds. Leaving some time for the pusher to finish.
 				tCtx, _ := context.WithTimeout(ctx, 1800*time.Millisecond)
 				<-tCtx.Done()
-				log.Printf("shutdown context timeout")
-				pusher.Stop()
-				return
+				cancel()
 			}
 		}
 	}

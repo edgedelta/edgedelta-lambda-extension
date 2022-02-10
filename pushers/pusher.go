@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
@@ -43,8 +42,6 @@ var (
 	}
 )
 
-type lambdaLog []map[string]interface{}
-
 type Pusher struct {
 	name          string
 	logClient     *http.Client
@@ -76,56 +73,16 @@ func NewPusher(conf *cfg.Config, logQueue chan []byte, runtimeDone chan struct{}
 
 // Start activates goroutines to consume logs.
 // If a shutdown or context cancel received, flush the queue and stop all operations.
-func (p *Pusher) Start() {
+func (p *Pusher) Start(ctx context.Context) {
 	for i := 0; i < p.parallelism; i++ {
 		i := i
-		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() { p.run(i) })
-	}
-}
-
-func (p *Pusher) FlushLogs(ctx context.Context) {
-	log.Printf("Flushing logs")
-	log.Printf("size of flush queue: %d", len(p.queue))
-	for i := 0; i < len(p.queue); i++ {
-		i := i
-		utils.Go(fmt.Sprintf("%s.flush#%d", p.name, i), func() { p.flush(i, ctx) })
-	}
-}
-
-// When we receive runtime done from system, we need to stop all other listening goroutines.
-func (p *Pusher) Stop() {
-	// stop streaming goroutines
-	for i := 0; i < p.parallelism; i++ {
-		p.stop <- struct{}{}
-		<-p.stopped
-	}
-	log.Printf("%s runtime done, stopped pusher", p.name)
-}
-
-func (p *Pusher) flush(id int, ctx context.Context) {
-	log.Printf("%s goroutine %d started flushing", p.name, id)
-	tCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
-	for {
-		select {
-		case item := <-p.queue:
-			log.Printf("%s goroutine %s received item from queue", p.name, string(item))
-			err := p.push(ctx, item)
-			if err != nil {
-				log.Printf("Error streaming data from %s, err: %v", p.name, err)
-			}
-		case <-tCtx.Done():
-			log.Printf("%s goroutine %d ctx timeout received", p.name, id)
-			cancel()
-			return
-		}
-
+		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() { p.run(i, ctx) })
 	}
 }
 
 //todo cancellable context in timeout time
-func (p *Pusher) run(id int) {
+func (p *Pusher) run(id int, ctx context.Context) {
 	log.Printf("%s goroutine %d started running", p.name, id)
-	ctx, cancel := context.WithCancel(context.Background())
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
 	for {
 		select {
@@ -135,13 +92,9 @@ func (p *Pusher) run(id int) {
 			if err != nil {
 				log.Printf("Error streaming data from %s, err: %v", p.name, err)
 			}
-		case <-p.stop:
-			cancel()
-			p.stopped <- struct{}{}
-			log.Printf("%s goroutine %d stopped", p.name, id)
-			return
+		case <-ctx.Done():
+			log.Printf("%s goroutine %d stopped running", p.name, id)
 		}
-
 	}
 }
 
@@ -152,16 +105,16 @@ func (p *Pusher) push(ctx context.Context, payload []byte) error {
 	var err error
 	if p.retryInterval > 0 {
 		err = utils.DoWithExpBackoffC(ctx, func() error {
-			return p.makeRequest(payload)
+			return p.makeRequest(ctx, payload)
 		}, p.retryInterval, p.retryTimeout)
 	} else {
-		err = p.makeRequest(payload)
+		err = p.makeRequest(ctx, payload)
 	}
 	return err
 }
 
-func (p *Pusher) makeRequest(payload []byte) error {
-	req, err := http.NewRequest(http.MethodPost, p.conf.EDEndpoint, bytes.NewReader(payload))
+func (p *Pusher) makeRequest(ctx context.Context, payload []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.conf.EDEndpoint, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("failed to create http post request: %s, err: %v", p.conf.EDEndpoint, err)
 	}
@@ -173,18 +126,6 @@ func (p *Pusher) makeRequest(payload []byte) error {
 func (p *Pusher) sendWithCaringResponseCode(req *http.Request) error {
 	resp, err := p.logClient.Do(req)
 	if err != nil {
-		origMsg := err.Error()
-		// Handle known common transport errors
-		if strings.Contains(origMsg, "no such host") {
-			return fmt.Errorf(origMsg, "Unknown endpoint host")
-		}
-		// See: crypto/x509/verify.go
-		if strings.Contains(origMsg, "x509: certificate signed by unknown authority") {
-			return fmt.Errorf(origMsg, "TLS Verify needs to be false")
-		}
-		if strings.Contains(origMsg, "x509: certificate") {
-			return fmt.Errorf(origMsg, "TLS Certificate Error")
-		}
 		return err
 	}
 	defer resp.Body.Close()

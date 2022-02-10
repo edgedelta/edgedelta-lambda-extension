@@ -24,7 +24,7 @@ Publish a new layer using the extension.zip and capture the produced layer arn i
 aws lambda publish-layer-version --layer-name "edgedelta-lambda-extension" --region "<use your region>" --zip-file  "fileb://extension.zip" | jq -r '.LayerVersionArn'
 ```
 
-Supported ENV_VARIABLES for Lambda Fucntion are:
+Supported ENV_VARIABLES for Lambda Function are:
 
 - ED_ENDPOINT: Hosted agents endpoint. Required.
 - PARALLELISM: Determines the count of streamer goroutines to consume logs. Default is 1.
