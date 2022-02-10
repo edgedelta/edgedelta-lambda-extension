@@ -93,8 +93,9 @@ func main() {
 			// Next invoke will start from here
 			if nextResponse.EventType == lambda.Shutdown {
 				log.Printf("shutdown received, stopping extension")
-				// Shutdown phase must be max 2 seconds. Leaving some time for the pusher to finish.
-				tCtx, _ := context.WithTimeout(ctx, 1800*time.Millisecond)
+				// Shutdown phase must be max 2 seconds. Leaving some time for the pusher to keep flushing from queue.
+				tCtx, tCancel := context.WithTimeout(context.Background(), 1800*time.Millisecond)
+				defer tCancel()
 				<-tCtx.Done()
 				cancel()
 			}

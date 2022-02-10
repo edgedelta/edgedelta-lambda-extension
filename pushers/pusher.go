@@ -84,16 +84,19 @@ func (p *Pusher) Start(ctx context.Context) {
 func (p *Pusher) run(id int, ctx context.Context) {
 	log.Printf("%s goroutine %d started running", p.name, id)
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
+	cctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	for {
 		select {
 		case item := <-p.queue:
-			log.Printf("%s goroutine %s received item from queue", p.name, string(item))
-			err := p.push(ctx, item)
+			log.Printf("goroutine %s received item from queue", string(item))
+			err := p.push(cctx, item)
 			if err != nil {
 				log.Printf("Error streaming data from %s, err: %v", p.name, err)
 			}
-		case <-ctx.Done():
+		case <-cctx.Done():
 			log.Printf("%s goroutine %d stopped running", p.name, id)
+			return
 		}
 	}
 }
