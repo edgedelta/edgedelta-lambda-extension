@@ -1,0 +1,50 @@
+# This is an example .goreleaser.yml file with some sensible defaults.
+# Make sure to check the documentation at https://goreleaser.com
+before:
+  hooks:
+    # You may remove this if you don't use go modules.
+    - go mod tidy
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+    binary: '{{ .ProjectName }}_v{{ .Version }}'
+    no_unique_dist_dir: true
+archives:
+  - format: zip
+    id: "zip"
+    wrap_in_directory: "true"
+    files:
+      - dist/{{ .ProjectName }}_v{{ .Version }}
+    name_template: 'extensions'
+  - format: tar.gz
+    id: "tar.gz"
+    wrap_in_directory: 'extensions'
+    files:
+      - dist/{{ .ProjectName }}_v{{ .Version }}
+    name_template: 'extensions'
+  - format: binary
+    id: "binary"
+    files:
+      - dist/{{ .ProjectName }}_v{{ .Version }}
+    name_template: '{{ .ProjectName }}_v{{ .Version }}'
+checksum:
+   name_template: '{{ .ProjectName }}_v{{ .Version }}_SHA256SUMS'
+   algorithm: sha256
+signs:
+  - artifacts: checksum
+    args:
+      # if you are using this in a GitHub action or some other automated pipeline, you 
+      # need to pass the batch flag to indicate its not interactive.
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}" # set this environment variable for your signing key
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
+changelog:
+  skip: true
