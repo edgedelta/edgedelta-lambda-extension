@@ -27,16 +27,16 @@ aws lambda publish-layer-version --layer-name "edgedelta-lambda-extension" --reg
 Supported ENV_VARIABLES for Lambda Function are:
 
 - ED_ENDPOINT: Hosted agents endpoint. Required.
-- PARALLELISM: Determines the count of streamer goroutines to consume logs. Default is 1.
-- LOG_TYPES: Which types of logs you want to get from Lambda Funcion. Options are function,platform,extension. Default is function,platform.
-- BUFFER_SIZE: Buffer size of the log channel before it block newly arrived logs. Default is 100.
-- RETRY_TIMEOUT: is the total duration for which to keep retry. Default is 0. This is a time.Duration() value.
-- RETRY_INTERVAL: RetryInterval is the initial interval to wait until next retry. It is increased exponentially until timeout limit is reached. Default is 0 which means no retries.
+- ED_PARALLELISM: Determines the count of streamer goroutines to consume logs. Default is 1.
+- ED_LAMBDA_LOG_TYPES: Which types of logs you want to get from Lambda Funcion. Options are function,platform,extension. Default is function,platform.
+- ED_BUFFER_SIZE: Buffer size of the log channel before it block newly arrived logs. Default is 100.
+- ED_RETRY_TIMEOUT: is the total duration for which to keep retry. Default is 0. This is a time.Duration() value.
+- ED_RETRY_INTERVAL: RetryInterval is the initial interval to wait until next retry. It is increased exponentially until timeout limit is reached. Default is 0 which means no retries.
   
 Lambda can buffer logs and deliver them to the subscriber. You can configure this behavior in the subscription request by specifying the following optional fields.
-- MAX_ITEMS: The maximum number of events to buffer in memory. Default: 1000. Minimum: 1000. Maximum: 10000.
-- MAX_BYTES: The maximum size (in bytes) of the logs to buffer in memory. Default: 262144. Minimum: 262144. Maximum: 1048576.
-- TIMEOUT_MS: he maximum number of events to buffer in memory. Default: 1000. Minimum: 1000. Maximum: 10000.
+- ED_LAMBDA_MAX_ITEMS: The maximum number of events to buffer in memory. Default: 1000. Minimum: 1000. Maximum: 10000.
+- ED_LAMBDA_MAX_BYTES: The maximum size (in bytes) of the logs to buffer in memory. Default: 262144. Minimum: 262144. Maximum: 1048576.
+- ED_LAMBDA_TIMEOUT_MS: he maximum number of events to buffer in memory. Default: 1000. Minimum: 1000. Maximum: 10000.
 
 In your AWS Lambda container image Dockerfile, add the command below.
 ```

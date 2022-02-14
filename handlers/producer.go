@@ -22,14 +22,14 @@ func NewProducer(queue chan []byte) *Producer {
 }
 
 // Start initiates the server where the logs will be sent
-//todo pass ctx here for cancel
 func (pr *Producer) Start() {
 	http.HandleFunc("/", pr.handleLogs)
 	address := fmt.Sprintf("0.0.0.0:%s", DefaultHttpListenerPort)
 	log.Printf("Listening to logs api on %s", address)
 	err := http.ListenAndServe(address, nil)
 	if err != nil {
-		//todo should not continue from here fatalf maybe
+		// do not need to cancel context necessarily because there might be unsent logs still in the queue.
+		// Wait for the lambda runtime to finish naturally.
 		log.Printf("Http Server closed, err: %v", err)
 	}
 }

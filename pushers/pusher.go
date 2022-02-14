@@ -80,7 +80,6 @@ func (p *Pusher) Start(ctx context.Context) {
 	}
 }
 
-//todo cancellable context in timeout time
 func (p *Pusher) run(id int, ctx context.Context) {
 	log.Printf("%s goroutine %d started running", p.name, id)
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.

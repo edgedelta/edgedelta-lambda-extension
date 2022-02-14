@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	validLogTypes = []string{"function", "platform", "extension"}
+	validLogTypes = map[string]bool{"function": false, "platform": false, "extension": false}
 )
 
 // Config for storing all parameters
@@ -27,7 +27,6 @@ type Config struct {
 }
 
 func GetConfigAndValidate() (*Config, error) {
-
 	config := &Config{
 		EDEndpoint: os.Getenv("ED_ENDPOINT"),
 	}
@@ -37,7 +36,7 @@ func GetConfigAndValidate() (*Config, error) {
 		return nil, errors.New("ED_ENDPOINT must be set as environment variable")
 	}
 
-	parallelism := os.Getenv("PARALLELISM")
+	parallelism := os.Getenv("ED_PARALLELISM")
 	if parallelism != "" {
 		if i, err := strconv.ParseInt(parallelism, 10, 0); err == nil {
 			config.Parallelism = int(i)
@@ -45,10 +44,10 @@ func GetConfigAndValidate() (*Config, error) {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse PARALLELISM: %v", err))
 		}
 	} else {
-		config.Parallelism = 1
+		config.Parallelism = 4
 	}
 
-	bufferSize := os.Getenv("BUFFER_SIZE")
+	bufferSize := os.Getenv("ED_BUFFER_SIZE")
 	if bufferSize != "" {
 		if i, err := strconv.ParseInt(bufferSize, 10, 0); err == nil {
 			config.BufferSize = int(i)
@@ -59,7 +58,7 @@ func GetConfigAndValidate() (*Config, error) {
 		config.BufferSize = 100
 	}
 
-	retryTimeout := os.Getenv("RETRY_TIMEOUT")
+	retryTimeout := os.Getenv("ED_RETRY_TIMEOUT")
 	if retryTimeout != "" {
 		if i, err := strconv.ParseInt(retryTimeout, 10, 0); err == nil {
 			config.RetryTimeout = time.Duration(i)
@@ -70,7 +69,7 @@ func GetConfigAndValidate() (*Config, error) {
 		config.RetryTimeout = 0
 	}
 
-	retryInterval := os.Getenv("RETRY_INTERVAL")
+	retryInterval := os.Getenv("ED_RETRY_INTERVAL")
 	if retryInterval != "" {
 		if i, err := strconv.ParseInt(retryInterval, 10, 0); err == nil {
 			config.RetryIntervals = time.Duration(i)
@@ -87,7 +86,7 @@ func GetConfigAndValidate() (*Config, error) {
 		TimeoutMS: 1000,
 	}
 
-	maxItems := os.Getenv("MAX_ITEMS")
+	maxItems := os.Getenv("ED_LAMBDA_MAX_ITEMS")
 	if maxItems != "" {
 		if i, err := strconv.ParseInt(maxItems, 10, 0); err == nil {
 			config.BfgConfig.MaxItems = uint32(i)
@@ -96,7 +95,7 @@ func GetConfigAndValidate() (*Config, error) {
 		}
 	}
 
-	maxBytes := os.Getenv("MAX_BYTES")
+	maxBytes := os.Getenv("ED_LAMBDA_MAX_BYTES")
 	if maxBytes != "" {
 		if i, err := strconv.ParseInt(maxBytes, 10, 0); err == nil {
 			config.BfgConfig.MaxBytes = uint32(i)
@@ -105,7 +104,7 @@ func GetConfigAndValidate() (*Config, error) {
 		}
 	}
 
-	timeoutMs := os.Getenv("TIMEOUT_MS")
+	timeoutMs := os.Getenv("ED_LAMBDA_TIMEOUT_MS")
 	if timeoutMs != "" {
 		if i, err := strconv.ParseInt(timeoutMs, 10, 0); err == nil {
 			config.BfgConfig.TimeoutMS = uint32(i)
@@ -114,22 +113,18 @@ func GetConfigAndValidate() (*Config, error) {
 		}
 	}
 
-	logTypesStr := os.Getenv("LOG_TYPES")
+	logTypesStr := os.Getenv("ED_LAMBDA_LOG_TYPES")
 	if logTypesStr != "" {
 		logTypes := strings.Split(logTypesStr, ",")
+		var usableLogTypes []string
 		for _, lg := range logTypes {
-			valid := false
-			for _, vl := range validLogTypes {
-				if vl == lg {
-					valid = true
-					break
-				}
-			}
-			if !valid {
+			if _, ok := validLogTypes[lg]; !ok {
 				multiErr = append(multiErr, fmt.Sprintf("Log type %s is not valid", lg))
+				continue
 			}
+			usableLogTypes = append(usableLogTypes, lg)
 		}
-		config.LogTypes = logTypes
+		config.LogTypes = usableLogTypes
 	} else {
 		config.LogTypes = []string{"platform", "function"}
 	}

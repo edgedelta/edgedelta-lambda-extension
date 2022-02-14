@@ -81,6 +81,8 @@ func main() {
 		select {
 		case <-ctx.Done():
 			log.Printf("Shutting down Edge Delta extension, context done.")
+			// added this sleep for debug purposes. See goroutine stopped logs before returning.
+			time.Sleep(200 * time.Millisecond)
 			return
 		default:
 			// This statement signals to lambda that the extension is ready for warm restart and
@@ -94,9 +96,7 @@ func main() {
 			if nextResponse.EventType == lambda.Shutdown {
 				log.Printf("shutdown received, stopping extension")
 				// Shutdown phase must be max 2 seconds. Leaving some time for the pusher to keep flushing from queue.
-				tCtx, tCancel := context.WithTimeout(context.Background(), 1800*time.Millisecond)
-				defer tCancel()
-				<-tCtx.Done()
+				time.Sleep(1800 * time.Millisecond)
 				cancel()
 			}
 		}
