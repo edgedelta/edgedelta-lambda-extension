@@ -18,13 +18,13 @@ archives:
     id: "zip"
     wrap_in_directory: "true"
     files:
-      - dist/{{ .ProjectName }}_v{{ .Version }}
+      - none*
     name_template: 'extensions'
   - format: tar.gz
     id: "tar.gz"
     wrap_in_directory: 'extensions'
     files:
-      - dist/{{ .ProjectName }}_v{{ .Version }}
+      - none*
     name_template: 'extensions'
   - format: binary
     id: "binary"
