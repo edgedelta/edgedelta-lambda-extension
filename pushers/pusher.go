@@ -148,7 +148,6 @@ func (p *Pusher) preprocess(ctx context.Context, payload []byte) error {
 	var processedLogs [][]byte
 	for _, item := range lambdaLog {
 		logType, ok := item["type"].(string)
-		timestamp := item["time"].(string)
 		if ok && logType == "function" {
 			if content, ok := item["record"].(string); ok {
 				content = strings.TrimSpace(content)
@@ -178,6 +177,10 @@ func (p *Pusher) preprocess(ctx context.Context, payload []byte) error {
 			// {"durationMs":1251.76,"billedDurationMs":1252,"memorySizeMB":128,"maxMemoryUsedMB":70,"initDurationMs":270.81}
 			if content, ok := item["record"].(map[string]interface{}); ok {
 				if metric, ok := content["metrics"].(map[string]interface{}); ok {
+					timestamp, ok := item["time"].(string)
+					if !ok {
+						timestamp = time.Now().UTC().Format(time.RFC3339)
+					}
 					edMetric := &EDMetric{
 						Common: Common{
 							LogType:   logType,
