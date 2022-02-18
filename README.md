@@ -51,3 +51,61 @@ $ docker run -it --entrypoint sh <name>:<tag>
 ls -R /opt/ 
 ```
 and check that /opt/extensions/edgedelta-lambda-extension is the directory structure you see.
+
+Native lambda function logs come in the format: 
+```
+[
+    {
+        "time":"2022-02-17T08:21:42.318Z",
+        "type":"function",
+        "record":"2022-02-17T08:21:42.318Z\t137469b1-125a-45e0-a856-a72569b340bb\tINFO\tactual log mesage here"
+    },
+    {
+        "time":"2022-02-17T08:21:42.819Z",
+        "type":"function","record":"2022-02-17T08:21:42.819Z\t137469b1-125a-45e0-a856-a72569b340bb\tINFO\t{\"severity\": \"debug\", \"message\":\"stderr log here\"}"
+    }
+]
+```
+ 
+ We separate the message array and preprocess it to a more readable format: 
+```
+{
+	"timestamp":"2022-02-17T16:23:19.243Z",
+	"message":"actual log message here",
+	"log_level":"INFO",
+	"log_type":"function",
+	"request_id":"52a8de89-6bf4-4ce7-87bc-b696f088b0ac"
+}
+
+```
+
+We also catch platform metric log in the format
+```
+{
+    "time":"2022-02-18T11:08:42.159Z",
+    "type":"platform.report",
+    "record": {
+        "requestId":"78b8f9e2-ee68-424d-a355-84cd91904dff",
+        "metrics": {
+            "durationMs":1154.11,
+            "billedDurationMs":1155,
+            "memorySizeMB":128,
+            "maxMemoryUsedMB":68,
+            "initDurationMs":216.65
+        }
+    }
+}
+```
+
+Preprocess it to: 
+```
+{
+	"timestamp":"2022-02-17T16:29:05.367Z",
+	"request_id":"e4a6ddd8-8906-4536-b158-8cf41abdaf9b",
+	"log_type":"platform.report",
+	"duration_ms":1106.33,
+	"billed_duration_ms":1107,
+	"max_memory_used":65,
+	"memory_size":128
+}
+```

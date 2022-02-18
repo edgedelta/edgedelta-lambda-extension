@@ -19,13 +19,13 @@ archives:
     wrap_in_directory: "true"
     files:
       - none*
-    name_template: 'extensions'
+    name_template: 'extension'
   - format: tar.gz
     id: "tar.gz"
-    wrap_in_directory: 'extensions'
+    wrap_in_directory: 'true'
     files:
       - none*
-    name_template: 'extensions'
+    name_template: 'extension'
   - format: binary
     id: "binary"
     files:

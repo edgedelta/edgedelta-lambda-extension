@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
@@ -41,6 +44,28 @@ var (
 		return &http.Client{Transport: t}
 	}
 )
+
+type LambdaLog []map[string]interface{}
+
+type Common struct {
+	Timestamp string `json:"timestamp"`
+	RequestId string `json:"request_id"`
+	LogType   string `json:"log_type"`
+}
+
+type EDLog struct {
+	Common
+	Message  string `json:"message"`
+	LogLevel string `json:"log_level"`
+}
+
+type EDMetric struct {
+	Common
+	DurationMs       float64 `json:"duration_ms"`
+	BilledDurationMs float64 `json:"billed_duration_ms"`
+	MaxMemoryUsed    float64 `json:"max_memory_used"`
+	MemorySize       float64 `json:"memory_size"`
+}
 
 type Pusher struct {
 	name          string
@@ -88,7 +113,6 @@ func (p *Pusher) run(id int, ctx context.Context) {
 	for {
 		select {
 		case item := <-p.queue:
-			log.Printf("goroutine %s received item from queue", string(item))
 			err := p.push(cctx, item)
 			if err != nil {
 				log.Printf("Error streaming data from %s, err: %v", p.name, err)
@@ -107,12 +131,91 @@ func (p *Pusher) push(ctx context.Context, payload []byte) error {
 	var err error
 	if p.retryInterval > 0 {
 		err = utils.DoWithExpBackoffC(ctx, func() error {
-			return p.makeRequest(ctx, payload)
+			return p.preprocess(ctx, payload)
 		}, p.retryInterval, p.retryTimeout)
 	} else {
-		err = p.makeRequest(ctx, payload)
+		err = p.preprocess(ctx, payload)
 	}
 	return err
+}
+
+func (p *Pusher) preprocess(ctx context.Context, payload []byte) error {
+	var lambdaLog LambdaLog
+	err := json.Unmarshal(payload, &lambdaLog)
+	if err != nil {
+		log.Printf("error unmarshalling log message %s, %v", string(payload), err)
+	}
+	var processedLogs [][]byte
+	for _, item := range lambdaLog {
+		logType, ok := item["type"].(string)
+		if ok && logType == "function" {
+			if content, ok := item["record"].(string); ok {
+				content = strings.TrimSpace(content)
+				tags := strings.Split(content, "\t")
+				if len(tags) < 4 {
+					log.Printf("error parsing function log message %s, %v", content, err)
+					continue
+				}
+				edLog := &EDLog{
+					Common: Common{
+						LogType:   logType,
+						Timestamp: tags[0],
+						RequestId: tags[1],
+					},
+				}
+				edLog.LogLevel = tags[2]
+				edLog.Message = tags[3]
+				mLog, err := json.Marshal(edLog)
+				if err != nil {
+					log.Printf("error marshalling function log message %v, %v", edLog, err)
+					continue
+				}
+				processedLogs = append(processedLogs, mLog)
+			}
+		} else if ok && logType == "platform.report" {
+			// metrics format is:
+			// {"durationMs":1251.76,"billedDurationMs":1252,"memorySizeMB":128,"maxMemoryUsedMB":70,"initDurationMs":270.81}
+			if content, ok := item["record"].(map[string]interface{}); ok {
+				if metric, ok := content["metrics"].(map[string]interface{}); ok {
+					timestamp, ok := item["time"].(string)
+					if !ok {
+						timestamp = time.Now().UTC().Format(time.RFC3339)
+					}
+					edMetric := &EDMetric{
+						Common: Common{
+							LogType:   logType,
+							Timestamp: timestamp,
+							RequestId: content["requestId"].(string),
+						},
+						DurationMs:       metric["durationMs"].(float64),
+						BilledDurationMs: metric["billedDurationMs"].(float64),
+						MaxMemoryUsed:    metric["maxMemoryUsedMB"].(float64),
+						MemorySize:       metric["memorySizeMB"].(float64),
+					}
+					mLog, err := json.Marshal(edMetric)
+					if err != nil {
+						log.Printf("error marshalling platform report message %v, %v", edMetric, err)
+						continue
+					}
+					processedLogs = append(processedLogs, mLog)
+				}
+			}
+		}
+	}
+
+	if len(processedLogs) > 0 {
+		var multiErr []string
+		for _, mlog := range processedLogs {
+			if err := p.makeRequest(ctx, mlog); err != nil {
+				multiErr = append(multiErr, fmt.Sprintf("cannot stream to ed endpoint: %v", err))
+			}
+		}
+		if len(multiErr) > 0 {
+			return errors.New(strings.Join(multiErr, ", "))
+		}
+	}
+
+	return nil
 }
 
 func (p *Pusher) makeRequest(ctx context.Context, payload []byte) error {
