@@ -71,11 +71,12 @@ type Pusher struct {
 	retryInterval time.Duration
 	retryTimeout  time.Duration
 	queue         chan lambda.LambdaLog
+	empty         chan struct{}
 	runtimeDone   chan struct{}
 }
 
 // NewPusher initialize hostedenv pusher.
-func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog, runtimeDone chan struct{}) *Pusher {
+func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog) *Pusher {
 	return &Pusher{
 		conf:          conf,
 		name:          "HostedEnv-Pusher",
@@ -84,37 +85,76 @@ func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog, runtimeDone cha
 		retryInterval: conf.RetryIntervals,
 		retryTimeout:  conf.RetryTimeout,
 		queue:         logQueue,
-		runtimeDone:   runtimeDone,
+		empty:         make(chan struct{}),
+		runtimeDone:   make(chan struct{}),
 	}
 }
 
-// Consume activates goroutines to consume logs.
+// Consume uses main goroutine to consume logs.
 // If a shutdown or context cancel received, flush the queue and stop all operations.
-func (p *Pusher) Consume(ctx context.Context) {
+func (p *Pusher) Consume(ctx context.Context) bool {
+	for {
+		select {
+		case item := <-p.queue:
+			err := p.push(ctx, item)
+			if err != nil {
+				log.Printf("Error streaming data from %s, err: %v", p.name, err)
+			}
+			itemType, ok := item["type"].(string)
+			if ok && itemType == string(lambda.RuntimeDone) {
+				log.Println("received runtime done")
+				return true
+			}
+		case <-ctx.Done():
+			log.Println("context deadline exceeded.")
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+// ConsumeParallel activates goroutines to consume logs.
+// If a shutdown or context cancel received, flush the queue and stop all operations.
+func (p *Pusher) ConsumeParallel(ctx context.Context) bool {
 	for i := 0; i < p.parallelism; i++ {
 		i := i
 		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() { p.run(i, ctx) })
 	}
+	runtimeDone := false
+	for i := 0; i < p.parallelism; i++ {
+		select {
+		case <-p.runtimeDone:
+			runtimeDone = true
+		case <-p.empty:
+		}
+	}
+	return runtimeDone
 }
 
 func (p *Pusher) run(id int, ctx context.Context) {
-	log.Printf("%s goroutine %d started running", p.name, id)
+	// log.Printf("%s goroutine %d started running", p.name, id)
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
 	for {
 		select {
 		case item := <-p.queue:
+			err := p.push(ctx, item)
+			if err != nil {
+				log.Printf("Error streaming data from %s, err: %v", p.name, err)
+			}
 			itemType, ok := item["type"].(string)
 			if ok && itemType == string(lambda.RuntimeDone) {
 				log.Printf("%s goroutine %d received runtime done", p.name, id)
 				p.runtimeDone <- struct{}{}
 				return
 			}
-			err := p.push(ctx, item)
-			if err != nil {
-				log.Printf("Error streaming data from %s, err: %v", p.name, err)
-			}
 		case <-ctx.Done():
-			log.Printf("%s goroutine %d stopped running", p.name, id)
+			log.Printf("%s goroutine %d context deadline reached", p.name, id)
+			p.runtimeDone <- struct{}{}
+			return
+		default:
+			// log.Printf("%s goroutine %d queue empty", p.name, id)
+			p.empty <- struct{}{}
 			return
 		}
 	}
@@ -185,9 +225,9 @@ func (p *Pusher) preprocess(ctx context.Context, payload lambda.LambdaLog) error
 
 	if processedLog != nil {
 		if err := p.makeRequest(ctx, processedLog); err != nil {
-			log.Printf("error sending log: %v", err)
 			return err
 		}
+		// log.Printf("%s sent log: %s", p.name, string(processedLog))
 	}
 
 	return nil

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -21,7 +22,6 @@ var (
 	extensionName = path.Base(os.Args[0])
 	lambdaClient  = lambda.NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API"))
 	pusher        *pushers.Pusher
-	runtimeDone   chan struct{}
 	extensionId   string
 	queue         chan lambda.LambdaLog
 )
@@ -37,8 +37,7 @@ func startExtension(ctx context.Context, config *cfg.Config) {
 	producer := handlers.NewProducer(queue)
 	go producer.Start()
 
-	runtimeDone = make(chan struct{})
-	pusher = pushers.NewPusher(config, queue, runtimeDone)
+	pusher = pushers.NewPusher(config, queue)
 
 	// Lambda delivers logs to a local HTTP endpoint (http://sandbox.localdomain:${PORT}/${PATH}) as an array of records in JSON format. The $PATH parameter is optional. Lambda reserves port 9001. There are no other port number restrictions or recommendations.
 	destination := lambda.Destination{
@@ -86,34 +85,26 @@ func main() {
 		default:
 			// This statement signals to lambda that the extension is ready for warm restart and
 			// will work until a timeout occurs or runtime crashes. Next invoke will start from here
-			log.Printf("Extension %s is ready for warm restart", extensionId)
 			nextResponse, err := lambdaClient.NextEvent(ctx, extensionId)
 			if err != nil {
 				log.Printf("Error during Next Event call: %v", err)
 				return
 			}
-
-			// Shutdown phase must be max 2 seconds. Leaving some time for the pusher to keep flushing from queue.
-			if nextResponse.EventType == lambda.Shutdown {
-				log.Printf("next event is shutdown, waiting for 2 seconds and then stopping extension")
-			}
+			log.Printf("Received next event type: %s", nextResponse.EventType)
 
 			possibleTimeout := time.UnixMilli(nextResponse.DeadlineMs)
 			timeLimitContext, timeLimitCancel := context.WithDeadline(ctx, possibleTimeout.Add(-100*time.Millisecond))
-			pusher.Consume(timeLimitContext)
-			select {
-			case <-timeLimitContext.Done():
-				log.Printf("Function timeout deadline reached.")
-			case <-runtimeDone:
-				log.Printf("Runtime done received.")
+			defer timeLimitCancel()
+			for {
+				runtimeDone := pusher.ConsumeParallel(timeLimitContext)
+				if runtimeDone {
+					log.Printf("Runtime is done, exiting consume step and going to next event.")
+					break
+				} else {
+					// log.Printf("Runtime is not done, yielding to log routine before next check")
+					runtime.Gosched()
+				}
 
-			}
-			if nextResponse.EventType == lambda.Shutdown {
-				cancel()
-			} else {
-				// there will probably be a warm restart, no need to cancel whole context.
-				timeLimitCancel()
-				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}

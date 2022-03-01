@@ -19,7 +19,7 @@ func Go(name string, fn func()) {
 	go func() {
 		defer func() {
 			if err := recover(); err != nil {
-				log.Fatal("%s paniced with err: %v, stack trace:\n%s", name, err, debug.Stack())
+				log.Panicf("%s paniced with err: %v, stack trace:\n%s", name, err, debug.Stack())
 			}
 		}()
 		fn()
