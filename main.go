@@ -23,7 +23,7 @@ var (
 	pusher        *pushers.Pusher
 	runtimeDone   chan struct{}
 	extensionId   string
-	queue         chan []byte
+	queue         chan lambda.LambdaLog
 )
 
 func startExtension(ctx context.Context, config *cfg.Config) {
@@ -33,13 +33,12 @@ func startExtension(ctx context.Context, config *cfg.Config) {
 		log.Printf("Problem encountered while registering to extension, %v", err)
 		os.Exit(1)
 	}
-	queue = make(chan []byte, config.BufferSize)
+	queue = make(chan lambda.LambdaLog, config.BufferSize)
 	producer := handlers.NewProducer(queue)
 	go producer.Start()
 
 	runtimeDone = make(chan struct{})
 	pusher = pushers.NewPusher(config, queue, runtimeDone)
-	pusher.Start(ctx)
 
 	// Lambda delivers logs to a local HTTP endpoint (http://sandbox.localdomain:${PORT}/${PATH}) as an array of records in JSON format. The $PATH parameter is optional. Lambda reserves port 9001. There are no other port number restrictions or recommendations.
 	destination := lambda.Destination{
@@ -59,6 +58,7 @@ func main() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	sigs := make(chan os.Signal, 1)
 	// todo could not trigger these signals on basic lambda functions -> maybe try with a long polling one
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
@@ -70,8 +70,7 @@ func main() {
 
 	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
 	startExtension(ctx, config)
-	// Finish Init() step of the extension and signal the runtime that we are ready to receive logs.
-	_, err = lambdaClient.NextEvent(ctx, extensionId)
+
 	if err != nil {
 		log.Printf("Problem encountered while getting next event, %v", err)
 		os.Exit(3)
@@ -82,22 +81,39 @@ func main() {
 		case <-ctx.Done():
 			log.Printf("Shutting down Edge Delta extension, context done.")
 			// added this sleep for debug purposes. See goroutine stopped logs before returning.
-			time.Sleep(200 * time.Millisecond)
+			time.Sleep(100 * time.Millisecond)
 			return
 		default:
 			// This statement signals to lambda that the extension is ready for warm restart and
-			// will work until a timeout occurs or runtime crashes.
+			// will work until a timeout occurs or runtime crashes. Next invoke will start from here
+			log.Printf("Extension %s is ready for warm restart", extensionId)
 			nextResponse, err := lambdaClient.NextEvent(ctx, extensionId)
 			if err != nil {
 				log.Printf("Error during Next Event call: %v", err)
 				return
 			}
-			// Next invoke will start from here
+
+			// Shutdown phase must be max 2 seconds. Leaving some time for the pusher to keep flushing from queue.
 			if nextResponse.EventType == lambda.Shutdown {
-				log.Printf("shutdown received, stopping extension")
-				// Shutdown phase must be max 2 seconds. Leaving some time for the pusher to keep flushing from queue.
-				time.Sleep(1800 * time.Millisecond)
+				log.Printf("next event is shutdown, waiting for 2 seconds and then stopping extension")
+			}
+
+			possibleTimeout := time.UnixMilli(nextResponse.DeadlineMs)
+			timeLimitContext, timeLimitCancel := context.WithDeadline(ctx, possibleTimeout.Add(-100*time.Millisecond))
+			pusher.Consume(timeLimitContext)
+			select {
+			case <-timeLimitContext.Done():
+				log.Printf("Function timeout deadline reached.")
+			case <-runtimeDone:
+				log.Printf("Runtime done received.")
+
+			}
+			if nextResponse.EventType == lambda.Shutdown {
 				cancel()
+			} else {
+				// there will probably be a warm restart, no need to cancel whole context.
+				timeLimitCancel()
+				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}

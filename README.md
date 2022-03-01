@@ -62,7 +62,7 @@ Native lambda function logs come in the format:
     },
     {
         "time":"2022-02-17T08:21:42.819Z",
-        "type":"function","record":"2022-02-17T08:21:42.819Z\t137469b1-125a-45e0-a856-a72569b340bb\tINFO\t{\"severity\": \"debug\", \"message\":\"stderr log here\"}"
+        "type":"function","record":"2022-02-17T08:21:42.819Z\t137469b1-125a-45e0-a856-a72569b340bb\tINFO\t{"severity": "debug", "message":"stderr log here"}"
     }
 ]
 ```
@@ -72,9 +72,7 @@ Native lambda function logs come in the format:
 {
 	"timestamp":"2022-02-17T16:23:19.243Z",
 	"message":"actual log message here",
-	"log_level":"INFO",
 	"log_type":"function",
-	"request_id":"52a8de89-6bf4-4ce7-87bc-b696f088b0ac"
 }
 
 ```
