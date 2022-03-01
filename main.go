@@ -69,11 +69,6 @@ func main() {
 
 	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
 	startExtension(ctx, config)
-
-	if err != nil {
-		log.Printf("Problem encountered while getting next event, %v", err)
-		os.Exit(3)
-	}
 	// The For loop will wait for an Invoke or Shutdown event and sleep until one of them comes with Nextevent().
 	for {
 		select {
