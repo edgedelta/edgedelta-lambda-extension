@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"path"
-	"runtime"
 	"syscall"
 	"time"
 
@@ -88,19 +87,10 @@ func main() {
 			log.Printf("Received next event type: %s", nextResponse.EventType)
 
 			possibleTimeout := time.UnixMilli(nextResponse.DeadlineMs)
-			timeLimitContext, timeLimitCancel := context.WithDeadline(ctx, possibleTimeout.Add(-100*time.Millisecond))
+			timeLimitContext, timeLimitCancel := context.WithDeadline(ctx, possibleTimeout.Add(-2000*time.Millisecond))
 			defer timeLimitCancel()
-			for {
-				runtimeDone := pusher.ConsumeParallel(timeLimitContext)
-				if runtimeDone {
-					log.Printf("Runtime is done, exiting consume step and going to next event.")
-					break
-				} else {
-					// log.Printf("Runtime is not done, yielding to log routine before next check")
-					runtime.Gosched()
-				}
-
-			}
+			pusher.ConsumeParallel(timeLimitContext)
+			log.Printf("Runtime is done, exiting consume step and going to next event.")
 		}
 	}
 }

@@ -49,13 +49,13 @@ func (pr *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// log.Printf("Received logs from Logs API: %s", body)
 	// Puts the log message into the queue
 	var lambdaLogs []lambda.LambdaLog
-	err = json.Unmarshal(body, &lambdaLogs)
-	if err != nil {
+	if err = json.Unmarshal(body, &lambdaLogs); err != nil {
 		log.Printf("error unmarshalling log message %s, %v", string(body), err)
+		return
 	}
+
 	for _, item := range lambdaLogs {
 		pr.queue <- item
 	}
