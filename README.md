@@ -54,27 +54,15 @@ and check that /opt/extensions/edgedelta-lambda-extension is the directory struc
 
 Native lambda function logs come in the format: 
 ```
-[
-    {
-        "time":"2022-02-17T08:21:42.318Z",
-        "type":"function",
-        "record":"2022-02-17T08:21:42.318Z\t137469b1-125a-45e0-a856-a72569b340bb\tINFO\tactual log mesage here"
-    },
-    {
-        "time":"2022-02-17T08:21:42.819Z",
-        "type":"function","record":"2022-02-17T08:21:42.819Z\t137469b1-125a-45e0-a856-a72569b340bb\tINFO\t{\"severity\": \"debug\", \"message\":\"stderr log here\"}"
-    }
-]
+"[{\"time\":\"2022-03-01T14:09:15.227Z\",\"type\":\"platform.start\",\"record\":{\"requestId\":\"d6cd4118-2b3b-4902-9b3f-a00e4ad99e5f\",\"version\":\"$LATEST\"}},{\"time\":\"2022-03-01T14:09:15.231Z\",\"type\":\"function\",\"record\":\"2022-03-01T14:09:15.231Z\\td6cd4118-2b3b-4902-9b3f-a00e4ad99e5f\\tINFO\\tError timeout 0\\n\"},{\"time\":\"2022-03-01T14:09:15.246Z\",\"type\":\"function\",\"record\":\"2022-03-01T14:09:15.245Z\\td6cd4118-2b3b-4902-9b3f-a00e4ad99e5f\\tINFO\\tError timeout 1\\n\"},{\"time\":\"2022-03-01T14:09:15.256Z\",\"type\":\"function\",\"record\":\"2022-03-01T14:09:15.256Z\\td6cd4118-2b3b-4902-9b3f-a00e4ad99e5f\\tINFO\\tError timeout 2\\n\"},{\"time\":\"2022-03-01T14:09:15.266Z\",\"type\":\"function\",\"record\":\"2022-03-01T14:09:15.266Z\\td6cd4118-2b3b-4902-9b3f-a00e4ad99e5f\\tINFO\\tError timeout 3\\n\"},{\"time\":\"2022-03-01T14:09:15.277Z\",\"type\":\"function\",\"record\":\"2022-03-01T14:09:15.277Z\\td6cd4118-2b3b-4902-9b3f-a00e4ad99e5f\\tINFO\\tError timeout 4\\n\"},{\"time\":\"2022-03-01T14:09:15.290Z\",\"type\":\"platform.runtimeDone\",\"record\":{\"requestId\":\"d6cd4118-2b3b-4902-9b3f-a00e4ad99e5f\",\"status\":\"success\"}}]\n"
 ```
  
  We separate the message array and preprocess it to a more readable format: 
 ```
 {
 	"timestamp":"2022-02-17T16:23:19.243Z",
-	"message":"actual log message here",
-	"log_level":"INFO",
+	"message":"\"2022-03-01T14:09:15.231Z\\td6cd4118-2b3b-4902-9b3f-a00e4ad99e5f\\tINFO\\tError timeout 0\\n\",
 	"log_type":"function",
-	"request_id":"52a8de89-6bf4-4ce7-87bc-b696f088b0ac"
 }
 
 ```

@@ -115,6 +115,8 @@ type SubscribeResponse struct {
 	body string
 }
 
+type LambdaLog map[string]interface{}
+
 // Client is the client used to interact with the Lambda API Endpoints
 type Client struct {
 	httpClient *http.Client

@@ -1,10 +1,13 @@
 package handlers
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+
+	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
 )
 
 // DefaultHttpListenerPort is used to set the URL where the logs will be sent by Logs API
@@ -12,10 +15,10 @@ const DefaultHttpListenerPort = "6060"
 
 // Producer is used to listen to the Logs API using HTTP
 type Producer struct {
-	queue chan []byte
+	queue chan lambda.LambdaLog
 }
 
-func NewProducer(queue chan []byte) *Producer {
+func NewProducer(queue chan lambda.LambdaLog) *Producer {
 	return &Producer{
 		queue: queue,
 	}
@@ -45,6 +48,15 @@ func (pr *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Error reading body: %+v", err)
 		return
 	}
+
 	// Puts the log message into the queue
-	pr.queue <- body
+	var lambdaLogs []lambda.LambdaLog
+	if err = json.Unmarshal(body, &lambdaLogs); err != nil {
+		log.Printf("error unmarshalling log message %s, %v", string(body), err)
+		return
+	}
+
+	for _, item := range lambdaLogs {
+		pr.queue <- item
+	}
 }
