@@ -28,11 +28,6 @@ archives:
     files:
       - none*
     name_template: 'extension'
-  - format: binary
-    id: "binary"
-    files:
-      - dist/{{ .ProjectName }}_v{{ .Version }}
-    name_template: '{{ .ProjectName }}_v{{ .Version }}'
 checksum:
    name_template: '{{ .ProjectName }}_v{{ .Version }}_SHA256SUMS'
    algorithm: sha256
