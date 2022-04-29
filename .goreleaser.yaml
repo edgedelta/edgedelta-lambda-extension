@@ -13,6 +13,8 @@ builds:
       - amd64
     binary: '{{ .ProjectName }}_v{{ .Version }}'
     no_unique_dist_dir: true
+    hooks: 
+      post: chmod +x {{ .Path }}
 archives:
   - format: zip
     id: "zip"
