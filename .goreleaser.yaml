@@ -16,18 +16,20 @@ builds:
     hooks: 
       post: chmod +x dist/{{ .Name }}
 archives:
-  - format: zip
-    id: "zip"
-    wrap_in_directory: "true"
-    files:
-      - none*
-    name_template: 'extension'
-  - format: tar.gz
-    id: "tar.gz"
-    wrap_in_directory: 'true'
-    files:
-      - none*
-    name_template: 'extension'
+  - format: binary
+# archives:
+#   - format: zip
+#     id: "zip"
+#     wrap_in_directory: "true"
+#     files:
+#       - none*
+#     name_template: 'extension'
+#   - format: tar.gz
+#     id: "tar.gz"
+#     wrap_in_directory: 'true'
+#     files:
+#       - none*
+#     name_template: 'extension'
 checksum:
    name_template: '{{ .ProjectName }}_v{{ .Version }}_SHA256SUMS'
    algorithm: sha256
