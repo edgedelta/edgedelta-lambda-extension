@@ -14,7 +14,7 @@ builds:
     binary: '{{ .ProjectName }}_v{{ .Version }}'
     no_unique_dist_dir: true
     hooks: 
-      post: chmod +x ${artifact}
+      post: chmod +x {{ .Name }}
 archives:
   - format: zip
     id: "zip"
