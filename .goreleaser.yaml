@@ -11,10 +11,12 @@ builds:
       - linux
     goarch:
       - amd64
-    binary: '{{ .ProjectName }}_v{{ .Version }}'
+    ldflags:
+      - -s -w -X main.build={{.Version}}
+    binary: '{{ .ProjectName }}'
     no_unique_dist_dir: true
     hooks: 
-      post: sh -c 'chmod +x dist/{{ .Name }}'
+      post: sh -c 'chmod +x {{ .Path }}'
 archives:
   - format: binary
 # archives:
