@@ -46,11 +46,11 @@ func GetConfigAndValidate() (*Config, error) {
 	}
 
 	if config.EDEndpoint == "" && config.PusherMode == HTTP_PUSHER {
-		return nil, errors.New("ED_ENDPOINT must be set as environment variable")
+		return nil, errors.New("ED_ENDPOINT must be set as environment variable when PUSHER_MODE is set to http")
 	}
 
 	if config.KinesisEndpoint == "" && config.PusherMode == KINESIS_PUSHER {
-		return nil, errors.New("KINESIS_ENDPOINT must be set as environment variable")
+		return nil, errors.New("KINESIS_ENDPOINT must be set as environment variable when PUSHER_MODE is set to kinesis")
 	}
 
 	parallelism := os.Getenv("ED_PARALLELISM")

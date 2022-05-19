@@ -13,12 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/firehose"
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
 	"github.com/edgedelta/edgedelta-lambda-extension/pkg/utils"
+
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/firehose"
 )
 
 var (
@@ -67,17 +68,18 @@ type EDMetric struct {
 }
 
 type Pusher struct {
-	name          string
-	logClient     *http.Client
-	kinesisClient *firehose.Firehose
-	conf          *cfg.Config
-	parallelism   int
-	retryInterval time.Duration
-	retryTimeout  time.Duration
-	queue         chan lambda.LambdaLog
-	runtimeDone   chan struct{}
-	stop          chan struct{}
-	stopped       chan struct{}
+	name            string
+	logClient       *http.Client
+	kinesisClient   *firehose.Firehose
+	makeRequestFunc func(ctx context.Context, payload []byte) error
+	conf            *cfg.Config
+	parallelism     int
+	retryInterval   time.Duration
+	retryTimeout    time.Duration
+	queue           chan lambda.LambdaLog
+	runtimeDone     chan struct{}
+	stop            chan struct{}
+	stopped         chan struct{}
 }
 
 // NewPusher initialize hostedenv pusher.
@@ -98,9 +100,11 @@ func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog) *Pusher {
 		p.name = "Kinesis-Pusher"
 		sess := session.Must(session.NewSession())
 		p.kinesisClient = firehose.New(sess)
+		p.makeRequestFunc = p.makeKinesisRequest
 	case cfg.HTTP_PUSHER:
 		p.name = "HostedEnv-Pusher"
 		p.logClient = newHTTPClientFunc()
+		p.makeRequestFunc = p.makeHTTPRequest
 	}
 	return p
 }
@@ -216,7 +220,7 @@ func (p *Pusher) process(ctx context.Context, payload lambda.LambdaLog) error {
 	}
 
 	if processedLog != nil {
-		if err := p.makeRequest(ctx, processedLog); err != nil {
+		if err := p.makeRequestFunc(ctx, processedLog); err != nil {
 			return err
 		}
 	}
@@ -224,26 +228,23 @@ func (p *Pusher) process(ctx context.Context, payload lambda.LambdaLog) error {
 	return nil
 }
 
-func (p *Pusher) makeRequest(ctx context.Context, payload []byte) error {
-	switch p.conf.PusherMode {
-	case cfg.HTTP_PUSHER:
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.conf.EDEndpoint, bytes.NewReader(payload))
-		if err != nil {
-			return fmt.Errorf("failed to create http post request: %s, err: %v", p.conf.EDEndpoint, err)
-		}
-		req.Close = true
-		req.Header.Add("Content-Type", "application/json")
-		return p.sendWithCaringResponseCode(req)
-	case cfg.KINESIS_PUSHER:
-		record := &firehose.Record{Data: payload}
-		_, err := p.kinesisClient.PutRecord(&firehose.PutRecordInput{
-			DeliveryStreamName: aws.String(p.conf.KinesisEndpoint),
-			Record:             record,
-		})
-		return err
-	default:
-		return fmt.Errorf("unsupported mode: %s", p.conf.PusherMode)
+func (p *Pusher) makeHTTPRequest(ctx context.Context, payload []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.conf.EDEndpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("failed to create http post request: %s, err: %v", p.conf.EDEndpoint, err)
 	}
+	req.Close = true
+	req.Header.Add("Content-Type", "application/json")
+	return p.sendWithCaringResponseCode(req)
+}
+
+func (p *Pusher) makeKinesisRequest(ctx context.Context, payload []byte) error {
+	record := &firehose.Record{Data: payload}
+	_, err := p.kinesisClient.PutRecord(&firehose.PutRecordInput{
+		DeliveryStreamName: aws.String(p.conf.KinesisEndpoint),
+		Record:             record,
+	})
+	return err
 }
 
 func (p *Pusher) sendWithCaringResponseCode(req *http.Request) error {
