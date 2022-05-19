@@ -11,29 +11,46 @@ import (
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
 )
 
+const (
+	HTTP_PUSHER    = "http"
+	KINESIS_PUSHER = "kinesis"
+)
+
 var (
 	validLogTypes = map[string]bool{"function": false, "platform": false, "extension": false}
 )
 
 // Config for storing all parameters
 type Config struct {
-	EDEndpoint     string
-	LogTypes       []string
-	BfgConfig      *lambda.BufferingCfg
-	BufferSize     int
-	Parallelism    int
-	RetryTimeout   time.Duration
-	RetryIntervals time.Duration
+	EDEndpoint      string
+	KinesisEndpoint string
+	PusherMode      string
+	LogTypes        []string
+	BfgConfig       *lambda.BufferingCfg
+	BufferSize      int
+	Parallelism     int
+	RetryTimeout    time.Duration
+	RetryIntervals  time.Duration
 }
 
 func GetConfigAndValidate() (*Config, error) {
 	config := &Config{
-		EDEndpoint: os.Getenv("ED_ENDPOINT"),
+		EDEndpoint:      os.Getenv("ED_ENDPOINT"),
+		PusherMode:      os.Getenv("PUSHER_MODE"),
+		KinesisEndpoint: os.Getenv("KINESIS_ENDPOINT"),
 	}
 
 	var multiErr []string
-	if config.EDEndpoint == "" {
-		return nil, errors.New("ED_ENDPOINT must be set as environment variable")
+	if config.PusherMode == "" {
+		config.PusherMode = HTTP_PUSHER
+	}
+
+	if config.EDEndpoint == "" && config.PusherMode == HTTP_PUSHER {
+		return nil, errors.New("ED_ENDPOINT must be set as environment variable when PUSHER_MODE is set to http")
+	}
+
+	if config.KinesisEndpoint == "" && config.PusherMode == KINESIS_PUSHER {
+		return nil, errors.New("KINESIS_ENDPOINT must be set as environment variable when PUSHER_MODE is set to kinesis")
 	}
 
 	parallelism := os.Getenv("ED_PARALLELISM")
