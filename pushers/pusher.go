@@ -140,14 +140,10 @@ func (p *Pusher) run(id int, ctx context.Context) {
 			if ok && itemType == string(lambda.RuntimeDone) {
 				log.Printf("%s goroutine %d received runtime done", p.name, id)
 				p.runtimeDone <- struct{}{}
-				p.stopped <- struct{}{}
-				return
 			}
 		case <-ctx.Done():
 			log.Printf("%s goroutine %d context deadline reached", p.name, id)
 			p.runtimeDone <- struct{}{}
-			p.stopped <- struct{}{}
-			return
 		case <-p.stop:
 			log.Printf("%d goroutine stopped", id)
 			p.stopped <- struct{}{}
