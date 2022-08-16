@@ -30,7 +30,7 @@ Supported ENV_VARIABLES for Lambda Function are:
 - ED_ENDPOINT: Hosted agents endpoint. Required if PUSHER_MODE is http.
 - KINESIS_ENDPOINT: Firehose stream endpoint. Required if PUSHER_MODE is kinesis.
 - ED_PARALLELISM: Determines the count of streamer goroutines to consume logs. Default is 1.
-- ED_LAMBDA_LOG_TYPES: Which types of logs you want to get from Lambda Funcion. Options are function,platform,extension. Default is function,platform.
+- ED_LAMBDA_LOG_TYPES: Which types of logs you want to get from Lambda Function. Options are function,platform,extension. Default is function,platform.
 - ED_BUFFER_SIZE: Buffer size of the log channel before it block newly arrived logs. Default is 100.
 - ED_RETRY_TIMEOUT: is the total duration for which to keep retry. Default is 0. This is a time.Duration() value.
 - ED_RETRY_INTERVAL: RetryInterval is the initial interval to wait until next retry. It is increased exponentially until timeout limit is reached. Default is 0 which means no retries.
