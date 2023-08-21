@@ -21,7 +21,7 @@ var (
 	lambdaClient  = lambda.NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API"))
 )
 
-func startExtension() (*cfg.Config, bool) {
+func startExtension() (*Worker, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), lambda.InitTimeout)
 	defer cancel()
 	extensionID, err := lambdaClient.Register(ctx, extensionName)
@@ -43,41 +43,58 @@ func startExtension() (*cfg.Config, bool) {
 		})
 		return nil, false
 	}
+	worker := NewWorker(config, extensionID)
+	worker.Start()
 
 	if err := lambdaClient.Subscribe(ctx, config.LogTypes, *config.BfgConfig, extensionID); err != nil {
-		log.Printf("Failed to subscribe to telemetry API, err: %v", err)
+		log.Printf("Failed to subscribe to Telemetry API, err: %v")
 		lambdaClient.InitError(ctx, extensionID, lambda.SubscribeError, lambda.LambdaError{
-			Type:    "SubscriptionError",
+			Type:    "SubscribeError",
 			Message: err.Error(),
 		})
+		worker.Stop(lambda.InitTimeout)
 		return nil, false
 	}
-	config.ExtensionID = extensionID
-	return config, true
+	return worker, true
 
 }
 
-func handleShutdown(body []byte) {
-
+type Worker struct {
+	ExtensionID string
+	pusher      *pushers.Pusher
+	producer    *handlers.Producer
 }
 
-func handleInvoke(body []byte) {
-	
-}
-
-func main() {
-	log.Println("starting edgedelta extension")
-	config, ok := startExtension()
-	if !ok {
-		os.Exit(1)
-	}
+func NewWorker(config *cfg.Config, extensionID string) *Worker {
 	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
 	queue := make(chan lambda.LambdaLog, config.BufferSize)
 	producer := handlers.NewProducer(queue)
-	go producer.Start()
-
 	pusher := pushers.NewPusher(config, queue)
+	return &Worker{
+		ExtensionID: extensionID,
+		producer:    producer,
+		pusher:      pusher,
+	}
 
+}
+func (w *Worker) Start() {
+	w.producer.Start()
+	w.pusher.Start()
+}
+
+func (w *Worker) Stop(timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	w.producer.Shutdown(ctx)
+	w.pusher.Stop(ctx)
+}
+
+func main() {
+	log.Println("Starting edgedelta extension")
+	worker, ok := startExtension()
+	if !ok {
+		os.Exit(1)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sigs := make(chan os.Signal, 1)
@@ -88,37 +105,48 @@ func main() {
 		log.Println("Received signal:", s)
 		cancel()
 	}()
-	
+
 	// The For loop will wait for an Invoke or Shutdown event and sleep until one of them comes with Nextevent().
 	for {
 		select {
 		case <-ctx.Done():
 			log.Printf("Shutting down Edge Delta extension, context done.")
 			// added this sleep for debug purposes. See goroutine stopped logs before returning.
-			time.Sleep(100 * time.Millisecond)
+			worker.Stop(lambda.KillTimeout)
 			return
 		default:
 			// This statement signals to lambda that the extension is ready for warm restart and
 			// will work until a timeout occurs or runtime crashes. Next invoke will start from here
-			eventType, eventBody, err := lambdaClient.NextEvent(ctx, config.ExtensionID)
+			eventType, eventBody, err := lambdaClient.NextEvent(ctx, worker.ExtensionID)
 			if err != nil {
 				log.Printf("Error during Next Event call: %v", err)
 				return
 			}
 			log.Printf("Received next event type: %s", eventType)
 			switch eventType {
-				case lambda.Invoke:
-					handleInvoke(eventBody)
-				case lambda.Shutdown:
-					handleShutdown(eventBody)
-
+			case lambda.Invoke:
+				invokeEvent, err := lambda.GetInvokeEvent(eventBody)
+				if err != nil {
+					log.Printf("Failed to parse Invoke event, err: %v", err)
+				}else{
+					log.Printf("Received Invoke event: %+v", invokeEvent)
+				}
+			case lambda.Shutdown:
+				timeout := lambda.ShutdownTimeout
+				shutdownEvent, err := lambda.GetShutdownEvent(eventBody)
+				if err != nil {
+					log.Printf("Failed to parse Shutdown event, err: %v", err)
+				} else {
+					log.Printf("Received Shutdown event: %+v", shutdownEvent)
+					timeout = time.Duration(shutdownEvent.DeadlineMs) * time.Millisecond
+				}
+				worker.Stop(timeout)
+				return
+			default:
+				log.Printf("Received unexpected event type: %s", eventType)
+				worker.Stop(lambda.ShutdownTimeout)
+				return
 			}
-
-			possibleTimeout := time.UnixMilli(nextResponse.DeadlineMs)
-			timeLimitContext, timeLimitCancel := context.WithDeadline(ctx, possibleTimeout.Add(-2000*time.Millisecond))
-			defer timeLimitCancel()
-			pusher.ConsumeParallel(timeLimitContext)
-			log.Printf("Runtime is done, exiting consume step and going to next event.")
 		}
 	}
 }

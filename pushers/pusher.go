@@ -111,24 +111,36 @@ func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog) *Pusher {
 
 // ConsumeParallel activates goroutines to consume logs.
 // If a shutdown or context cancel received, flush the queue and stop all operations.
-func (p *Pusher) ConsumeParallel(ctx context.Context) {
+func (p *Pusher) Start() {
 	for i := 0; i < p.parallelism; i++ {
 		i := i
-		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() { p.run(i, ctx) })
-	}
-	<-p.runtimeDone
-	// either runtime done or we are close to timeout, either way time to stop.
-	for i := 0; i < p.parallelism; i++ {
-		p.stop <- struct{}{}
-	}
-	// collecting goroutines
-	for i := 0; i < p.parallelism; i++ {
-		<-p.stopped
+		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() { p.run(i, p.parallelism) })
 	}
 }
 
-func (p *Pusher) run(id int, ctx context.Context) {
+func (p *Pusher) Stop(ctx context.Context) {
+	for i := 0; i < p.parallelism; i++ {
+		p.stop <- struct{}{}
+	}
+	numStopped := 0
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("%d pushers failed to exit gracefully", p.parallelism-numStopped)
+			return
+		case <-p.stopped:
+			numStopped++
+			if numStopped == p.parallelism {
+				log.Printf("All pushers exited gracefully")
+				return
+			}
+		}
+	}
+}
+
+func (p *Pusher) run(id int, numPushers int) {
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
+	logs := make(lambda.LambdaLog, 0, )
 	for {
 		select {
 		case item := <-p.queue:
@@ -139,9 +151,11 @@ func (p *Pusher) run(id int, ctx context.Context) {
 			itemType, ok := item["type"].(string)
 			if ok && itemType == string(lambda.RuntimeDone) {
 				log.Printf("%s goroutine %d received runtime done", p.name, id)
-				p.runtimeDone <- struct{}{}
+				for i:=0; i<numPushers; i++ {
+					p.runtimeDone <- struct{}{}
+				}
 			}
-		case <-ctx.Done():
+		case <-p.runtimeDone:
 			log.Printf("%s goroutine %d context deadline reached", p.name, id)
 			p.runtimeDone <- struct{}{}
 		case <-p.stop:

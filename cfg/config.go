@@ -26,7 +26,6 @@ var (
 
 // Config for storing all parameters
 type Config struct {
-	ExtensionID     string
 	EDEndpoint      string
 	KinesisEndpoint string
 	PusherMode      string

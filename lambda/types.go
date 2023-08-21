@@ -136,7 +136,11 @@ type SubscribeRequest struct {
 	Destination   Destination   `json:"destination"`
 }
 
-const InitTimeout = 5 * time.Second
+const (
+	InitTimeout     = 5 * time.Second
+	ShutdownTimeout = 1 * time.Second
+	KillTimeout     = 100 * time.Millisecond
+)
 
 type FunctionErrorType string
 

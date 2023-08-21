@@ -103,3 +103,21 @@ func (e *Client) InitError(ctx context.Context, extensionId string, errorType Fu
 	defer httpRes.Body.Close()
 	return nil
 }
+
+func GetInvokeEvent(body []byte) (*InvokeEvent, error) {
+	var res InvokeEvent
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+
+}
+
+func GetShutdownEvent(body []byte) (*ShutdownEvent, error) {
+	var res ShutdownEvent
+	if err := json.Unmarshal(body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+
+}
