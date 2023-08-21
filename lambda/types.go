@@ -3,6 +3,7 @@ package lambda
 import (
 	"fmt"
 	"net/http"
+	"time"
 )
 
 const (
@@ -18,15 +19,6 @@ type RegisterResponse struct {
 	FunctionName    string `json:"functionName"`
 	FunctionVersion string `json:"functionVersion"`
 	Handler         string `json:"handler"`
-}
-
-// NextEventResponse is the response for /event/next
-type NextEventResponse struct {
-	EventType          ExtensionEventType `json:"eventType"`
-	DeadlineMs         int64              `json:"deadlineMs"`
-	RequestID          string             `json:"requestId"`
-	InvokedFunctionArn string             `json:"invokedFunctionArn"`
-	Tracing            Tracing            `json:"tracing"`
 }
 
 // Tracing is part of the response for /event/next
@@ -50,6 +42,31 @@ const (
 	// Shutdown is a shutdown event for the environment
 	Shutdown ExtensionEventType = "SHUTDOWN"
 )
+
+type ShutdownReasonType string
+
+const (
+	Spindown ShutdownReasonType = "spindown"
+	Timeout  ShutdownReasonType = "timeout"
+	Failure  ShutdownReasonType = "failure"
+)
+
+// NextEvent is the response for /event/next
+type NextEvent struct {
+	EventType ExtensionEventType `json:"eventType"`
+}
+
+type InvokeEvent struct {
+	DeadlineMs         int64   `json:"deadlineMs"`
+	RequestID          string  `json:"requestId"`
+	InvokedFunctionArn string  `json:"invokedFunctionArn"`
+	Tracing            Tracing `json:"tracing"`
+}
+
+type ShutdownEvent struct {
+	DeadlineMs     int64              `json:"deadlineMs"`
+	ShutdownReason ShutdownReasonType `json:"shutdownReason"`
+}
 
 const (
 	// Platform is to receive logs emitted by the platform
@@ -119,11 +136,14 @@ type SubscribeRequest struct {
 	Destination   Destination   `json:"destination"`
 }
 
+const InitTimeout = 5 * time.Second
+
 type FunctionErrorType string
 
 const (
 	SubscribeError FunctionErrorType = "Extension.SubscribeError"
 	RegisterError  FunctionErrorType = "Extension.RegisterError"
+	ConfigError    FunctionErrorType = "Extension.ConfigError"
 )
 
 type LambdaError struct {

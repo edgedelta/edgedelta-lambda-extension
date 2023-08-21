@@ -47,38 +47,37 @@ func (e *Client) Register(ctx context.Context, filename string) (string, error) 
 }
 
 // NextEvent blocks while long polling for the next lambda invoke or shutdown
-func (e *Client) NextEvent(ctx context.Context, extensionId string) (*NextEventResponse, error) {
+func (e *Client) NextEvent(ctx context.Context, extensionId string) (ExtensionEventType, []byte, error) {
 	const action = "event/next"
 	url := fmt.Sprintf("%s/%s/%s", e.baseUrl, LambdaExtensionEndpoint, action)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	httpReq.Header.Set(extensionIdentiferHeader, extensionId)
 	httpRes, err := e.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	if httpRes.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("request failed with status %s", httpRes.Status)
+		return "", nil, fmt.Errorf("request failed with status %s", httpRes.Status)
 	}
 	defer httpRes.Body.Close()
 	body, err := io.ReadAll(httpRes.Body)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	res := NextEventResponse{}
+	var res NextEvent
 	err = json.Unmarshal(body, &res)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	return &res, nil
+	return res.EventType, body, nil
 }
 
-
 // InitError is used to report an Initialization Error to lambda
-func (e *Client) InitError(ctx context.Context, extensionId string, errorType FunctionErrorType, lambdaError LambdaError) ( error) {
+func (e *Client) InitError(ctx context.Context, extensionId string, errorType FunctionErrorType, lambdaError LambdaError) error {
 	const action = "init/error"
 	url := fmt.Sprintf("%s/%s/%s", e.baseUrl, LambdaExtensionEndpoint, action)
 

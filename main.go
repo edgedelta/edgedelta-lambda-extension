@@ -19,45 +19,64 @@ var (
 	// Lambda uses the full file name of the extension to validate that the extension has completed the bootstrap sequence.
 	extensionName = path.Base(os.Args[0])
 	lambdaClient  = lambda.NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API"))
-	pusher        *pushers.Pusher
-	extensionId   string
-	queue         chan lambda.LambdaLog
 )
 
-func startExtension(ctx context.Context, config *cfg.Config) {
-	id, err := lambdaClient.Register(ctx, extensionName)
+func startExtension() (*cfg.Config, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), lambda.InitTimeout)
+	defer cancel()
+	extensionID, err := lambdaClient.Register(ctx, extensionName)
 	if err != nil {
 		log.Printf("Failed to register the extension, err: %v", err)
-		lambdaClient.InitError(ctx, extensionId, lambda.RegisterError, lambda.LambdaError{
-			Type: "RegistrationError",
+		lambdaClient.InitError(ctx, extensionID, lambda.RegisterError, lambda.LambdaError{
+			Type:    "RegistrationError",
 			Message: err.Error(),
 		})
-		os.Exit(1)
+		return nil, false
 	}
-	extensionId = id
-	
-	if err := lambdaClient.Subscribe(ctx, config.LogTypes, *config.BfgConfig, extensionId); err != nil {
-		log.Printf("Failed to subscribe to telemetry API, err: %v", err)
-		lambdaClient.InitError(ctx, extensionId, lambda.SubscribeError, lambda.LambdaError{
-			Type: "SubscriptionError",
-			Message: err.Error(),
-		})
-		os.Exit(1)
-	}
-	queue = make(chan lambda.LambdaLog, config.BufferSize)
-	producer := handlers.NewProducer(queue)
-	go producer.Start()
 
-	pusher = pushers.NewPusher(config, queue)
+	config, err := cfg.GetConfigAndValidate()
+	if err != nil {
+		log.Printf("Failed to parse config, err: %v", err)
+		lambdaClient.InitError(ctx, extensionID, lambda.ConfigError, lambda.LambdaError{
+			Type:    "InvalidConfig",
+			Message: err.Error(),
+		})
+		return nil, false
+	}
+
+	if err := lambdaClient.Subscribe(ctx, config.LogTypes, *config.BfgConfig, extensionID); err != nil {
+		log.Printf("Failed to subscribe to telemetry API, err: %v", err)
+		lambdaClient.InitError(ctx, extensionID, lambda.SubscribeError, lambda.LambdaError{
+			Type:    "SubscriptionError",
+			Message: err.Error(),
+		})
+		return nil, false
+	}
+	config.ExtensionID = extensionID
+	return config, true
+
+}
+
+func handleShutdown(body []byte) {
+
+}
+
+func handleInvoke(body []byte) {
+	
 }
 
 func main() {
 	log.Println("starting edgedelta extension")
-	config, err := cfg.GetConfigAndValidate()
-	if err != nil {
-		log.Printf("fatal error while parsing config: %v", err)
-		os.Exit(2)
+	config, ok := startExtension()
+	if !ok {
+		os.Exit(1)
 	}
+	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
+	queue := make(chan lambda.LambdaLog, config.BufferSize)
+	producer := handlers.NewProducer(queue)
+	go producer.Start()
+
+	pusher := pushers.NewPusher(config, queue)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -69,9 +88,7 @@ func main() {
 		log.Println("Received signal:", s)
 		cancel()
 	}()
-
-	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
-	startExtension(ctx, config)
+	
 	// The For loop will wait for an Invoke or Shutdown event and sleep until one of them comes with Nextevent().
 	for {
 		select {
@@ -83,12 +100,19 @@ func main() {
 		default:
 			// This statement signals to lambda that the extension is ready for warm restart and
 			// will work until a timeout occurs or runtime crashes. Next invoke will start from here
-			nextResponse, err := lambdaClient.NextEvent(ctx, extensionId)
+			eventType, eventBody, err := lambdaClient.NextEvent(ctx, config.ExtensionID)
 			if err != nil {
 				log.Printf("Error during Next Event call: %v", err)
 				return
 			}
-			log.Printf("Received next event type: %s", nextResponse.EventType)
+			log.Printf("Received next event type: %s", eventType)
+			switch eventType {
+				case lambda.Invoke:
+					handleInvoke(eventBody)
+				case lambda.Shutdown:
+					handleShutdown(eventBody)
+
+			}
 
 			possibleTimeout := time.UnixMilli(nextResponse.DeadlineMs)
 			timeLimitContext, timeLimitCancel := context.WithDeadline(ctx, possibleTimeout.Add(-2000*time.Millisecond))

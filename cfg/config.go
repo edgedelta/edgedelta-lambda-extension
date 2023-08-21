@@ -17,11 +17,16 @@ const (
 )
 
 var (
-	validLogTypes = map[string]bool{"function": false, "platform": false, "extension": false}
+	validLogTypes = map[string]bool{
+		"function":  false,
+		"platform":  false,
+		"extension": false,
+	}
 )
 
 // Config for storing all parameters
 type Config struct {
+	ExtensionID     string
 	EDEndpoint      string
 	KinesisEndpoint string
 	PusherMode      string
