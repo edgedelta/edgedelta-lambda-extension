@@ -3,15 +3,14 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
 )
 
-// DefaultHttpListenerPort is used to set the URL where the logs will be sent by Logs API
-const DefaultHttpListenerPort = "6060"
+
 
 // Producer is used to listen to the Logs API using HTTP
 type Producer struct {
@@ -27,7 +26,7 @@ func NewProducer(queue chan lambda.LambdaLog) *Producer {
 // Start initiates the server where the logs will be sent
 func (pr *Producer) Start() {
 	http.HandleFunc("/", pr.handleLogs)
-	address := fmt.Sprintf("0.0.0.0:%s", DefaultHttpListenerPort)
+	address := fmt.Sprintf("0.0.0.0:%s", lambda.DefaultHttpListenerPort)
 	log.Printf("Listening to logs api on %s", address)
 	err := http.ListenAndServe(address, nil)
 	if err != nil {
@@ -43,7 +42,7 @@ func (pr *Producer) Start() {
 // Logging or printing besides the error cases below is not recommended if you have subscribed to receive extension logs.
 // Otherwise, logging here will cause Logs API to send new logs for the printed lines which will create an infinite loop.
 func (pr *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("Error reading body: %+v", err)
 		return

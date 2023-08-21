@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -26,10 +25,23 @@ var (
 )
 
 func startExtension(ctx context.Context, config *cfg.Config) {
-	var err error
-	extensionId, err = lambdaClient.Register(ctx, extensionName)
+	id, err := lambdaClient.Register(ctx, extensionName)
 	if err != nil {
-		log.Printf("Problem encountered while registering to extension, %v", err)
+		log.Printf("Failed to register the extension, err: %v", err)
+		lambdaClient.InitError(ctx, extensionId, lambda.RegisterError, lambda.LambdaError{
+			Type: "RegistrationError",
+			Message: err.Error(),
+		})
+		os.Exit(1)
+	}
+	extensionId = id
+	
+	if err := lambdaClient.Subscribe(ctx, config.LogTypes, *config.BfgConfig, extensionId); err != nil {
+		log.Printf("Failed to subscribe to telemetry API, err: %v", err)
+		lambdaClient.InitError(ctx, extensionId, lambda.SubscribeError, lambda.LambdaError{
+			Type: "SubscriptionError",
+			Message: err.Error(),
+		})
 		os.Exit(1)
 	}
 	queue = make(chan lambda.LambdaLog, config.BufferSize)
@@ -37,14 +49,6 @@ func startExtension(ctx context.Context, config *cfg.Config) {
 	go producer.Start()
 
 	pusher = pushers.NewPusher(config, queue)
-
-	// Lambda delivers logs to a local HTTP endpoint (http://sandbox.localdomain:${PORT}/${PATH}) as an array of records in JSON format. The $PATH parameter is optional. Lambda reserves port 9001. There are no other port number restrictions or recommendations.
-	destination := lambda.Destination{
-		Protocol: lambda.HttpProto,
-		URI:      lambda.URI(fmt.Sprintf("http://sandbox:%s", handlers.DefaultHttpListenerPort)),
-	}
-
-	lambdaClient.Subscribe(config.LogTypes, *config.BfgConfig, destination, extensionId)
 }
 
 func main() {
@@ -62,8 +66,8 @@ func main() {
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		s := <-sigs
-		cancel()
 		log.Println("Received signal:", s)
+		cancel()
 	}()
 
 	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.

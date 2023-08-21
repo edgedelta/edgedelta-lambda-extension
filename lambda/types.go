@@ -9,7 +9,7 @@ const (
 	extensionNameHeader      = "Lambda-Extension-Name"
 	extensionIdentiferHeader = "Lambda-Extension-Identifier"
 	extensionErrorType       = "Lambda-Extension-Function-Error-Type"
-	LambdaLogsEndpoint       = "2020-08-15/logs"
+	LambdaTelemetryEndpoint  = "2022-07-01/telemetry"
 	LambdaExtensionEndpoint  = "2020-01-01/extension"
 )
 
@@ -95,6 +95,15 @@ type Destination struct {
 	URI      URI          `json:"URI"`
 }
 
+// DefaultHttpListenerPort is used to set the URL where the logs will be sent by Telemetry API
+const DefaultHttpListenerPort = "6060"
+
+// Lambda delivers logs to a local HTTP endpoint (http://sandbox.localdomain:${PORT}/${PATH}) as an array of records in JSON format. The $PATH parameter is optional. Lambda reserves port 9001. There are no other port number restrictions or recommendations.
+var destination = Destination{
+	Protocol: HttpProto,
+	URI:      URI(fmt.Sprintf("http://sandbox:%s", DefaultHttpListenerPort)),
+}
+
 type SchemaVersion string
 
 const (
@@ -110,9 +119,16 @@ type SubscribeRequest struct {
 	Destination   Destination   `json:"destination"`
 }
 
-// SubscribeResponse is the response body that is received from Logs API on subscribe
-type SubscribeResponse struct {
-	body string
+type FunctionErrorType string
+
+const (
+	SubscribeError FunctionErrorType = "Extension.SubscribeError"
+	RegisterError  FunctionErrorType = "Extension.RegisterError"
+)
+
+type LambdaError struct {
+	Message string `json:"errorMessage"`
+	Type    string `json:"errorType"`
 }
 
 type LambdaLog map[string]interface{}
