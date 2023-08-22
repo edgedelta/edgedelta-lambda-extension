@@ -47,7 +47,7 @@ func startExtension() (*Worker, bool) {
 	worker.Start()
 
 	if err := lambdaClient.Subscribe(ctx, config.LogTypes, *config.BfgConfig, extensionID); err != nil {
-		log.Printf("Failed to subscribe to Telemetry API, err: %v")
+		log.Printf("Failed to subscribe to Telemetry API, err: %v", err)
 		lambdaClient.InitError(ctx, extensionID, lambda.SubscribeError, lambda.LambdaError{
 			Type:    "SubscribeError",
 			Message: err.Error(),
@@ -67,7 +67,7 @@ type Worker struct {
 
 func NewWorker(config *cfg.Config, extensionID string) *Worker {
 	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
-	queue := make(chan lambda.LambdaLog, 100)
+	queue := make(chan lambda.LambdaLog, config.BfgConfig.MaxItems)
 	producer := handlers.NewProducer(queue)
 	pusher := pushers.NewPusher(config, queue)
 	return &Worker{
@@ -83,11 +83,12 @@ func (w *Worker) Start() {
 }
 
 func (w *Worker) Stop(timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	w.producer.Shutdown(ctx)
-	w.pusher.Stop(ctx)
+	// give a smaller timeout, so we finish gracefully
+	t := timeout - 1 *time.Millisecond
+	w.producer.Shutdown(t)
+	w.pusher.Stop(t)
 }
+
 
 func main() {
 	log.Println("Starting edgedelta extension")
@@ -120,7 +121,7 @@ func main() {
 			eventType, eventBody, err := lambdaClient.NextEvent(ctx, worker.ExtensionID)
 			if err != nil {
 				log.Printf("Error during Next Event call: %v", err)
-				return
+				continue
 			}
 			log.Printf("Received next event type: %s", eventType)
 			switch eventType {

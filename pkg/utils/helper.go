@@ -39,3 +39,10 @@ func DoWithExpBackoffC(ctx context.Context, f func() error, initialInterval, tim
 	b := backoff.WithContext(expBackoff, ctx)
 	return backoff.Retry(f, b)
 }
+
+func GetExpBackoff(initialInterval time.Duration) *backoff.ExponentialBackOff {
+	expBackoff := backoff.NewExponentialBackOff()
+	expBackoff.RandomizationFactor = defaultRandomizationFactor
+	expBackoff.InitialInterval = initialInterval
+	return expBackoff
+}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff"
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
 	"github.com/edgedelta/edgedelta-lambda-extension/pkg/utils"
@@ -73,26 +74,21 @@ type Pusher struct {
 	kinesisClient   *firehose.Firehose
 	makeRequestFunc func(context.Context, *bytes.Buffer) error
 	conf            *cfg.Config
-	parallelism     int
-	retryInterval   time.Duration
-	retryTimeout    time.Duration
 	queue           chan lambda.LambdaLog
-	runtimeDone     chan struct{}
-	stop            chan struct{}
+	runtimeDone     chan int
+	stop            chan time.Duration
 	stopped         chan struct{}
 }
 
 // NewPusher initialize hostedenv pusher.
 func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog) *Pusher {
+	numPushers := conf.Parallelism
 	p := &Pusher{
-		conf:          conf,
-		parallelism:   conf.Parallelism,
-		retryInterval: conf.RetryIntervals,
-		retryTimeout:  conf.RetryTimeout,
-		queue:         logQueue,
-		stop:          make(chan struct{}, conf.Parallelism),
-		stopped:       make(chan struct{}, conf.Parallelism),
-		runtimeDone:   make(chan struct{}),
+		conf:        conf,
+		queue:       logQueue,
+		stop:        make(chan time.Duration, numPushers),
+		stopped:     make(chan struct{}, numPushers),
+		runtimeDone: make(chan int, numPushers),
 	}
 	// default mode is http
 	switch conf.PusherMode {
@@ -112,25 +108,29 @@ func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog) *Pusher {
 // ConsumeParallel activates goroutines to consume logs.
 // If a shutdown or context cancel received, flush the queue and stop all operations.
 func (p *Pusher) Start() {
-	for i := 0; i < p.parallelism; i++ {
+	numPushers := p.conf.Parallelism
+	for i := 0; i < numPushers; i++ {
 		i := i
-		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() { p.run(i, p.parallelism) })
+		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() { p.run(i, numPushers, p.conf.BufferSize, p.conf.RetryInterval, p.conf.PushTimeout) })
 	}
 }
 
-func (p *Pusher) Stop(ctx context.Context) {
-	for i := 0; i < p.parallelism; i++ {
-		p.stop <- struct{}{}
+func (p *Pusher) Stop(timeout time.Duration) {
+	numPushers := p.conf.Parallelism
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for i := 0; i < numPushers; i++ {
+		p.stop <- timeout
 	}
 	numStopped := 0
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("%d pushers failed to exit gracefully", p.parallelism-numStopped)
+			log.Printf("%d pushers failed to exit gracefully", numPushers-numStopped)
 			return
 		case <-p.stopped:
 			numStopped++
-			if numStopped == p.parallelism {
+			if numStopped == numPushers {
 				log.Printf("All pushers exited gracefully")
 				return
 			}
@@ -138,51 +138,78 @@ func (p *Pusher) Stop(ctx context.Context) {
 	}
 }
 
-func (p *Pusher) run(id int, numPushers int) {
+func (p *Pusher) run(id, numPushers, bufferSize int, initialRetryInterval, pushTimeout time.Duration) {
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
-	msg := fmt.Sprintf("%s goroutine %d", p.name, id)
+	logPrefix := fmt.Sprintf("%s goroutine %d", p.name, id)
 	buf := new(bytes.Buffer)
-	maxBufferSize := p.conf.BufferSize
+	var backoff *backoff.ExponentialBackOff
+	var timer *time.Timer
+	retry := make(chan struct{}, 1)
+	retryLater := func(msg string) {
+		if backoff != nil {
+			return
+		}
+		log.Print(msg)
+		backoff = utils.GetExpBackoff(initialRetryInterval)
+		timer = time.AfterFunc(backoff.NextBackOff(), func() {
+			retry <- struct{}{}
+		})
+	}
+
 	for {
 		select {
 		case item := <-p.queue:
 			runtimeDone, b, err := process(item)
-			if runtimeDone{
-				log.Printf("%s received runtime done", msg)
-				for i:=0; i<numPushers; i++ {
+			if runtimeDone {
+				log.Printf("%s received runtime done", logPrefix)
+				for i := 0; i < numPushers; i++ {
 					// We assume no more logs will arrive until next invocation, so all pushers will receive from runtimeDone channel.
-					p.runtimeDone <- struct{}{}
+					p.runtimeDone <- i
 				}
 				continue
 			}
-			if err != nil{
-				log.Printf("%s failed to process log item %+v, err: %v", msg, item,err)
+			if err != nil {
+				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, item, err)
 				continue
 			}
 			if b != nil {
 				buf.Write(b)
 				buf.WriteRune('\n')
 			}
-			if buf.Len() >= maxBufferSize {
-				log.Printf("%s has reached max buffer size, pushing logs", msg)
-				if err := p.push(buf, 100 * time.Millisecond); err != nil {
-					log.Printf("%s failed to push logs, err: %v", msg, err)
-				}else{
-					buf.Reset()
-				}
+			if buf.Len() >= bufferSize {
+				retryLater(fmt.Sprintf("%s has reached max buffer size, starting retries", logPrefix))
 			}
-		case <-p.runtimeDone:
-			log.Printf("%s has invocation done, pushing logs", msg)
-			if err := p.push(buf, 100 * time.Millisecond); err != nil {
-				log.Printf("%s failed to push logs, err: %v", msg, err)
-			}else{
+		case k := <-p.runtimeDone:
+			if k != id {
+				// This is not this goroutine's id, so put it back to the channel
+				p.runtimeDone <- k
+				continue
+			}
+			log.Printf("%s has invocation done, pushing logs", logPrefix)
+			if err := p.push(buf, pushTimeout); err != nil {
+				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
+				retryLater(fmt.Sprintf("%s has invocation done, starting retries", logPrefix))
+			} else {
 				buf.Reset()
 			}
-			
-		case <-p.stop:
-			log.Printf("%s is stopped, pushing logs one last time", msg)
-			if err := p.push(buf, 100 * time.Millisecond); err != nil {
-				log.Printf("%s failed to push logs, err: %v", msg, err)
+		case <-retry:
+			log.Printf("%s is retrying pushing logs", logPrefix)
+			if err := p.push(buf, pushTimeout); err != nil {
+				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
+				timer = time.AfterFunc(backoff.NextBackOff(), func() {
+					retry <- struct{}{}
+				})
+			} else {
+				buf.Reset()
+				backoff = nil
+			}
+		case t := <-p.stop:
+			if timer != nil {
+				timer.Stop()
+			}
+			log.Printf("%s is stopped, pushing logs one last time", logPrefix)
+			if err := p.push(buf, t); err != nil {
+				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
 			}
 			p.stopped <- struct{}{}
 			return
@@ -196,15 +223,10 @@ func (p *Pusher) push(buf *bytes.Buffer, timeout time.Duration) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	if p.retryInterval > 0 {
-		return utils.DoWithExpBackoffC(ctx, func() error {
-			return p.makeRequestFunc(ctx, buf)
-		}, p.retryInterval, p.retryTimeout)
-	}
 	return p.makeRequestFunc(ctx, buf)
 }
 
-func process(payload lambda.LambdaLog) (bool, []byte, error){
+func process(payload lambda.LambdaLog) (bool, []byte, error) {
 	if payload == nil {
 		return false, nil, nil
 	}
@@ -214,7 +236,7 @@ func process(payload lambda.LambdaLog) (bool, []byte, error){
 	}
 	if logType == string(lambda.RuntimeDone) {
 		return true, nil, nil
-	}else if logType == "function" {
+	} else if logType == "function" {
 		if content, ok := payload["record"].(string); ok {
 			timestamp, ok := payload["time"].(string)
 			if !ok {
@@ -272,7 +294,7 @@ func (p *Pusher) makeHTTPRequest(ctx context.Context, buf *bytes.Buffer) error {
 
 func (p *Pusher) makeKinesisRequest(ctx context.Context, buf *bytes.Buffer) error {
 	record := &firehose.Record{Data: buf.Bytes()}
-	_, err := p.kinesisClient.PutRecord(&firehose.PutRecordInput{
+	_, err := p.kinesisClient.PutRecordWithContext(ctx, &firehose.PutRecordInput{
 		DeliveryStreamName: aws.String(p.conf.KinesisEndpoint),
 		Record:             record,
 	})

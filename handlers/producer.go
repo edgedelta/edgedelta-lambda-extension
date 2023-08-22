@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
 )
@@ -33,9 +34,7 @@ func (p *Producer) Start() {
 		err := p.server.ListenAndServe()
 		if err != http.ErrServerClosed {
 			log.Printf("Unexpected stop on Http Server, err: %v", err)
-			ctx, cancel := context.WithTimeout(context.Background(), lambda.KillTimeout)
-			defer cancel()
-			p.Shutdown(ctx)
+			p.Shutdown(lambda.KillTimeout)
 		} else {
 			log.Printf("Http Server closed")
 		}
@@ -67,14 +66,15 @@ func (p *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // Terminates the HTTP server listening for logs
-func (p *Producer) Shutdown(ctx context.Context) {
+func (p *Producer) Shutdown(timeout time.Duration) {
 	if p.server == nil {
 		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	if err := p.server.Shutdown(ctx); err != nil {
 		log.Printf("Failed to shutdown http server gracefully, err: %v", err)
 	} else {
 		p.server = nil
 	}
-
 }

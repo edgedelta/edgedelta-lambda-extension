@@ -33,8 +33,8 @@ type Config struct {
 	BfgConfig       *lambda.BufferingCfg
 	BufferSize      int
 	Parallelism     int
-	RetryTimeout    time.Duration
-	RetryIntervals  time.Duration
+	PushTimeout     time.Duration
+	RetryInterval   time.Duration
 }
 
 func GetConfigAndValidate() (*Config, error) {
@@ -76,29 +76,29 @@ func GetConfigAndValidate() (*Config, error) {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse BUFFER_SIZE_IN_BYTES: %v", err))
 		}
 	} else {
-		config.BufferSize = 10*1000*1000
+		config.BufferSize = 10 * 1000 * 1000
 	}
 
-	retryTimeout := os.Getenv("ED_RETRY_TIMEOUT")
-	if retryTimeout != "" {
-		if i, err := strconv.ParseInt(retryTimeout, 10, 0); err == nil {
-			config.RetryTimeout = time.Duration(i)
+	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT")
+	if pushTimeout != "" {
+		if i, err := strconv.ParseInt(pushTimeout, 10, 0); err == nil {
+			config.PushTimeout = time.Duration(i)
 		} else {
-			multiErr = append(multiErr, fmt.Sprintf("Unable to parse RETRY_TIMEOUT: %v", err))
+			multiErr = append(multiErr, fmt.Sprintf("Unable to parse PUSH_TIMEOUT: %v", err))
 		}
 	} else {
-		config.RetryTimeout = 0
+		config.PushTimeout = 500 * time.Millisecond
 	}
 
 	retryInterval := os.Getenv("ED_RETRY_INTERVAL")
 	if retryInterval != "" {
 		if i, err := strconv.ParseInt(retryInterval, 10, 0); err == nil {
-			config.RetryIntervals = time.Duration(i)
+			config.RetryInterval = time.Duration(i)
 		} else {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse RETRY_INTERVAL: %v", err))
 		}
 	} else {
-		config.RetryIntervals = 0
+		config.RetryInterval = 10 * time.Millisecond
 	}
 
 	config.BfgConfig = &lambda.BufferingCfg{
