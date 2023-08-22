@@ -67,7 +67,7 @@ type Worker struct {
 
 func NewWorker(config *cfg.Config, extensionID string) *Worker {
 	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
-	queue := make(chan lambda.LambdaLog, config.BufferSize)
+	queue := make(chan lambda.LambdaLog, 100)
 	producer := handlers.NewProducer(queue)
 	pusher := pushers.NewPusher(config, queue)
 	return &Worker{
@@ -144,8 +144,6 @@ func main() {
 				return
 			default:
 				log.Printf("Received unexpected event type: %s", eventType)
-				worker.Stop(lambda.ShutdownTimeout)
-				return
 			}
 		}
 	}

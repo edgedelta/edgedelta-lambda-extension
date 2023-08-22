@@ -6,7 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -71,7 +71,7 @@ type Pusher struct {
 	name            string
 	logClient       *http.Client
 	kinesisClient   *firehose.Firehose
-	makeRequestFunc func(ctx context.Context, payload []byte) error
+	makeRequestFunc func(context.Context, *bytes.Buffer) error
 	conf            *cfg.Config
 	parallelism     int
 	retryInterval   time.Duration
@@ -140,57 +140,86 @@ func (p *Pusher) Stop(ctx context.Context) {
 
 func (p *Pusher) run(id int, numPushers int) {
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
-	logs := make(lambda.LambdaLog, 0, )
+	msg := fmt.Sprintf("%s goroutine %d", p.name, id)
+	buf := new(bytes.Buffer)
+	maxBufferSize := p.conf.BufferSize
 	for {
 		select {
 		case item := <-p.queue:
-			err := p.push(ctx, item)
-			if err != nil {
-				log.Printf("Error streaming data from %s, err: %v", p.name, err)
-			}
-			itemType, ok := item["type"].(string)
-			if ok && itemType == string(lambda.RuntimeDone) {
-				log.Printf("%s goroutine %d received runtime done", p.name, id)
+			runtimeDone, b, err := process(item)
+			if runtimeDone{
+				log.Printf("%s received runtime done", msg)
 				for i:=0; i<numPushers; i++ {
+					// We assume no more logs will arrive until next invocation, so all pushers will receive from runtimeDone channel.
 					p.runtimeDone <- struct{}{}
+				}
+				continue
+			}
+			if err != nil{
+				log.Printf("%s failed to process log item %+v, err: %v", msg, item,err)
+				continue
+			}
+			if b != nil {
+				buf.Write(b)
+				buf.WriteRune('\n')
+			}
+			if buf.Len() >= maxBufferSize {
+				log.Printf("%s has reached max buffer size, pushing logs", msg)
+				if err := p.push(buf, 100 * time.Millisecond); err != nil {
+					log.Printf("%s failed to push logs, err: %v", msg, err)
+				}else{
+					buf.Reset()
 				}
 			}
 		case <-p.runtimeDone:
-			log.Printf("%s goroutine %d context deadline reached", p.name, id)
-			p.runtimeDone <- struct{}{}
+			log.Printf("%s has invocation done, pushing logs", msg)
+			if err := p.push(buf, 100 * time.Millisecond); err != nil {
+				log.Printf("%s failed to push logs, err: %v", msg, err)
+			}else{
+				buf.Reset()
+			}
+			
 		case <-p.stop:
-			log.Printf("%d goroutine stopped", id)
+			log.Printf("%s is stopped, pushing logs one last time", msg)
+			if err := p.push(buf, 100 * time.Millisecond); err != nil {
+				log.Printf("%s failed to push logs, err: %v", msg, err)
+			}
 			p.stopped <- struct{}{}
 			return
 		}
 	}
 }
 
-func (p *Pusher) push(ctx context.Context, payload lambda.LambdaLog) error {
-	if payload == nil {
-		return fmt.Errorf("%s post is called with nil data", p.name)
+func (p *Pusher) push(buf *bytes.Buffer, timeout time.Duration) error {
+	if buf.Len() == 0 {
+		return nil
 	}
-	var err error
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	if p.retryInterval > 0 {
-		err = utils.DoWithExpBackoffC(ctx, func() error {
-			return p.process(ctx, payload)
+		return utils.DoWithExpBackoffC(ctx, func() error {
+			return p.makeRequestFunc(ctx, buf)
 		}, p.retryInterval, p.retryTimeout)
-	} else {
-		err = p.process(ctx, payload)
 	}
-	return err
+	return p.makeRequestFunc(ctx, buf)
 }
 
-func (p *Pusher) process(ctx context.Context, payload lambda.LambdaLog) error {
-	var processedLog []byte
-	var err error
-	timestamp, ok := payload["time"].(string)
-	if !ok {
-		timestamp = time.Now().UTC().Format(time.RFC3339)
+func process(payload lambda.LambdaLog) (bool, []byte, error){
+	if payload == nil {
+		return false, nil, nil
 	}
 	logType, ok := payload["type"].(string)
-	if ok && logType == "function" {
+	if !ok {
+		return false, nil, fmt.Errorf("failed to find the type of the payload")
+	}
+	if logType == string(lambda.RuntimeDone) {
+		return true, nil, nil
+	}else if logType == "function" {
 		if content, ok := payload["record"].(string); ok {
+			timestamp, ok := payload["time"].(string)
+			if !ok {
+				timestamp = time.Now().UTC().Format(time.RFC3339)
+			}
 			content = strings.TrimSpace(content)
 			edLog := &EDLog{
 				Common: Common{
@@ -199,17 +228,19 @@ func (p *Pusher) process(ctx context.Context, payload lambda.LambdaLog) error {
 				},
 				Message: content,
 			}
-			processedLog, err = json.Marshal(edLog)
-			if err != nil {
-				log.Printf("error marshalling function log message %v, %v", edLog, err)
-				return err
-			}
+			b, err := json.Marshal(edLog)
+			return false, b, err
 		}
-	} else if ok && logType == "platform.report" {
+		return false, nil, nil
+	} else if logType == "platform.report" {
 		// metrics format is:
 		// {"durationMs":1251.76,"billedDurationMs":1252,"memorySizeMB":128,"maxMemoryUsedMB":70,"initDurationMs":270.81}
 		if content, ok := payload["record"].(map[string]interface{}); ok {
 			if metric, ok := content["metrics"].(map[string]interface{}); ok {
+				timestamp, ok := payload["time"].(string)
+				if !ok {
+					timestamp = time.Now().UTC().Format(time.RFC3339)
+				}
 				edMetric := &EDMetric{
 					Common: Common{
 						LogType:   logType,
@@ -220,26 +251,17 @@ func (p *Pusher) process(ctx context.Context, payload lambda.LambdaLog) error {
 					MaxMemoryUsed:    metric["maxMemoryUsedMB"].(float64),
 					MemorySize:       metric["memorySizeMB"].(float64),
 				}
-				processedLog, err = json.Marshal(edMetric)
-				if err != nil {
-					log.Printf("error marshalling platform report message %v, %v", edMetric, err)
-					return err
-				}
+				b, err := json.Marshal(edMetric)
+				return false, b, err
 			}
 		}
+		return false, nil, nil
 	}
-
-	if processedLog != nil {
-		if err := p.makeRequestFunc(ctx, processedLog); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return false, nil, nil
 }
 
-func (p *Pusher) makeHTTPRequest(ctx context.Context, payload []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.conf.EDEndpoint, bytes.NewReader(payload))
+func (p *Pusher) makeHTTPRequest(ctx context.Context, buf *bytes.Buffer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.conf.EDEndpoint, buf)
 	if err != nil {
 		return fmt.Errorf("failed to create http post request: %s, err: %v", p.conf.EDEndpoint, err)
 	}
@@ -248,8 +270,8 @@ func (p *Pusher) makeHTTPRequest(ctx context.Context, payload []byte) error {
 	return p.sendWithCaringResponseCode(req)
 }
 
-func (p *Pusher) makeKinesisRequest(ctx context.Context, payload []byte) error {
-	record := &firehose.Record{Data: payload}
+func (p *Pusher) makeKinesisRequest(ctx context.Context, buf *bytes.Buffer) error {
+	record := &firehose.Record{Data: buf.Bytes()}
 	_, err := p.kinesisClient.PutRecord(&firehose.PutRecordInput{
 		DeliveryStreamName: aws.String(p.conf.KinesisEndpoint),
 		Record:             record,
@@ -264,7 +286,7 @@ func (p *Pusher) sendWithCaringResponseCode(req *http.Request) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		bodyBytes, err := ioutil.ReadAll(resp.Body)
+		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("%s response body read failed err: %v", p.name, err)
 		}

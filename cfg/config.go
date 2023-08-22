@@ -68,15 +68,15 @@ func GetConfigAndValidate() (*Config, error) {
 		config.Parallelism = 4
 	}
 
-	bufferSize := os.Getenv("ED_BUFFER_SIZE")
+	bufferSize := os.Getenv("ED_BUFFER_SIZE_IN_BYTES")
 	if bufferSize != "" {
 		if i, err := strconv.ParseInt(bufferSize, 10, 0); err == nil {
 			config.BufferSize = int(i)
 		} else {
-			multiErr = append(multiErr, fmt.Sprintf("Unable to parse BUFFER_SIZE: %v", err))
+			multiErr = append(multiErr, fmt.Sprintf("Unable to parse BUFFER_SIZE_IN_BYTES: %v", err))
 		}
 	} else {
-		config.BufferSize = 100
+		config.BufferSize = 10*1000*1000
 	}
 
 	retryTimeout := os.Getenv("ED_RETRY_TIMEOUT")
