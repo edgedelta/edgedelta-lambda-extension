@@ -176,8 +176,8 @@ func (p *Pusher) run(id, numPushers, bufferSize int, initialRetryInterval, pushT
 				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, item, err)
 				continue
 			}
-			count++
 			if b != nil {
+				count++
 				buf.Write(b)
 				buf.WriteRune('\n')
 			}
@@ -214,11 +214,11 @@ func (p *Pusher) run(id, numPushers, bufferSize int, initialRetryInterval, pushT
 			if timer != nil {
 				timer.Stop()
 			}
+			log.Printf("%s received a total of %d logs", logPrefix, receivedCount)
 			log.Printf("%s is stopped, pushing %d logs one last time", logPrefix, count)
 			if err := p.push(buf, t); err != nil {
 				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
 			}
-			log.Printf("%s received a total of %d logs", logPrefix, receivedCount)
 			p.stopped <- struct{}{}
 			return
 		}

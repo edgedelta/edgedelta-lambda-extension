@@ -90,7 +90,7 @@ func (w *Worker) Stop(timeout time.Duration) {
 }
 
 func main() {
-	log.SetPrefix(extensionName)
+	log.SetPrefix("[Edge Delta] ")
 	log.Println("Starting edgedelta extension")
 	worker, ok := startExtension()
 	if !ok {
