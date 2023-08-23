@@ -124,8 +124,8 @@ var destination = Destination{
 type SchemaVersion string
 
 const (
-	SchemaVersion20210318 = "2021-03-18"
-	SchemaVersionLatest   = SchemaVersion20210318
+	SchemaVersion20220701 = "2022-07-01"
+	SchemaVersionLatest   = SchemaVersion20220701
 )
 
 // SubscribeRequest is the request body that is sent to Logs API on subscribe
