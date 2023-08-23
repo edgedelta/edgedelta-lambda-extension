@@ -68,17 +68,6 @@ func GetConfigAndValidate() (*Config, error) {
 		config.Parallelism = 4
 	}
 
-	bufferSize := os.Getenv("ED_BUFFER_SIZE_IN_BYTES")
-	if bufferSize != "" {
-		if i, err := strconv.ParseInt(bufferSize, 10, 0); err == nil {
-			config.BufferSize = int(i)
-		} else {
-			multiErr = append(multiErr, fmt.Sprintf("Unable to parse BUFFER_SIZE_IN_BYTES: %v", err))
-		}
-	} else {
-		config.BufferSize = 5 * 1000 * 1000
-	}
-
 	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT_MS")
 	if pushTimeout != "" {
 		if i, err := strconv.ParseInt(pushTimeout, 10, 0); err == nil {
@@ -124,6 +113,8 @@ func GetConfigAndValidate() (*Config, error) {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse MAX_BYTES: %v", err))
 		}
 	}
+	// https://docs.aws.amazon.com/lambda/latest/dg/telemetry-api.html
+	config.BufferSize = int(2*config.BfgConfig.MaxBytes + 300*config.BfgConfig.MaxItems) / config.Parallelism
 
 	timeoutMs := os.Getenv("ED_LAMBDA_TIMEOUT_MS")
 	if timeoutMs != "" {

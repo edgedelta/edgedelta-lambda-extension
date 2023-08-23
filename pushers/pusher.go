@@ -155,10 +155,14 @@ func (p *Pusher) run(id, numPushers, bufferSize int, initialRetryInterval, pushT
 			retry <- struct{}{}
 		})
 	}
+	receivedCount := 0
+	count := 0
 
 	for {
 		select {
 		case item := <-p.queue:
+			log.Printf("%s received item: %+v", logPrefix, item)
+			receivedCount++
 			runtimeDone, b, err := process(item)
 			if runtimeDone {
 				log.Printf("%s received runtime done", logPrefix)
@@ -172,6 +176,7 @@ func (p *Pusher) run(id, numPushers, bufferSize int, initialRetryInterval, pushT
 				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, item, err)
 				continue
 			}
+			count++
 			if b != nil {
 				buf.Write(b)
 				buf.WriteRune('\n')
@@ -185,21 +190,23 @@ func (p *Pusher) run(id, numPushers, bufferSize int, initialRetryInterval, pushT
 				p.runtimeDone <- k
 				continue
 			}
-			log.Printf("%s has invocation done, pushing logs", logPrefix)
+			log.Printf("%s has invocation done, pushing %d logs", logPrefix, count)
 			if err := p.push(buf, pushTimeout); err != nil {
 				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
 				retryLater(fmt.Sprintf("%s has invocation done, starting retries", logPrefix))
 			} else {
+				count = 0
 				buf.Reset()
 			}
 		case <-retry:
-			log.Printf("%s is retrying pushing logs", logPrefix)
+			log.Printf("%s is retrying pushing %d logs", logPrefix, count)
 			if err := p.push(buf, pushTimeout); err != nil {
 				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
 				timer = time.AfterFunc(backoff.NextBackOff(), func() {
 					retry <- struct{}{}
 				})
 			} else {
+				count = 0
 				buf.Reset()
 				backoff = nil
 			}
@@ -207,10 +214,11 @@ func (p *Pusher) run(id, numPushers, bufferSize int, initialRetryInterval, pushT
 			if timer != nil {
 				timer.Stop()
 			}
-			log.Printf("%s is stopped, pushing logs one last time", logPrefix)
+			log.Printf("%s is stopped, pushing %d logs one last time", logPrefix, count)
 			if err := p.push(buf, t); err != nil {
 				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
 			}
+			log.Printf("%s received a total of %d logs", logPrefix, receivedCount)
 			p.stopped <- struct{}{}
 			return
 		}

@@ -84,13 +84,13 @@ func (w *Worker) Start() {
 
 func (w *Worker) Stop(timeout time.Duration) {
 	// give a smaller timeout, so we finish gracefully
-	t := timeout - 1 *time.Millisecond
+	t := timeout - 1*time.Millisecond
 	w.producer.Shutdown(t)
 	w.pusher.Stop(t)
 }
 
-
 func main() {
+	log.SetPrefix(extensionName)
 	log.Println("Starting edgedelta extension")
 	worker, ok := startExtension()
 	if !ok {
@@ -129,7 +129,7 @@ func main() {
 				invokeEvent, err := lambda.GetInvokeEvent(eventBody)
 				if err != nil {
 					log.Printf("Failed to parse Invoke event, err: %v", err)
-				}else{
+				} else {
 					log.Printf("Received Invoke event: %+v", invokeEvent)
 				}
 			case lambda.Shutdown:
