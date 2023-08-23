@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -48,11 +49,16 @@ var (
 		}
 		return &http.Client{Transport: t}
 	}
+	functionName    = os.Getenv("AWS_LAMBDA_FUNCTION_NAME")
+	functionVersion = os.Getenv("AWS_LAMBDA_FUNCTION_VERSION")
 )
 
 type Common struct {
-	Timestamp string `json:"timestamp"`
-	LogType   string `json:"log_type"`
+	FaasName        string `json:"faas.name"`
+	FaasVersion     string `json:"faas.version"`
+	CloudResourceID string `json:"cloud.resource_id"`
+	Timestamp       string `json:"timestamp"`
+	LogType         string `json:"log_type"`
 }
 
 type EDLog struct {
@@ -78,17 +84,18 @@ type Pusher struct {
 	runtimeDone     chan int
 	stop            chan time.Duration
 	stopped         chan struct{}
+	invokeChannels  []chan string
 }
 
 // NewPusher initialize hostedenv pusher.
 func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog) *Pusher {
 	numPushers := conf.Parallelism
 	p := &Pusher{
-		conf:        conf,
-		queue:       logQueue,
-		stop:        make(chan time.Duration, numPushers),
-		stopped:     make(chan struct{}, numPushers),
-		runtimeDone: make(chan int, numPushers),
+		conf:           conf,
+		queue:          logQueue,
+		stop:           make(chan time.Duration, numPushers),
+		stopped:        make(chan struct{}, numPushers),
+		invokeChannels: make([]chan string, 0, numPushers),
 	}
 	// default mode is http
 	switch conf.PusherMode {
@@ -111,7 +118,17 @@ func (p *Pusher) Start() {
 	numPushers := p.conf.Parallelism
 	for i := 0; i < numPushers; i++ {
 		i := i
-		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() { p.run(i, numPushers, p.conf.BufferSize, p.conf.RetryInterval, p.conf.PushTimeout) })
+		invoke := make(chan string, 1)
+		p.invokeChannels = append(p.invokeChannels, invoke)
+		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() {
+			p.run(i, invoke, p.conf.BufferSize, p.conf.RetryInterval, p.conf.PushTimeout, p.conf.MaxLatency)
+		})
+	}
+}
+
+func (p *Pusher) Invoke(functionARN string) {
+	for _, c := range p.invokeChannels {
+		c <- functionARN
 	}
 }
 
@@ -119,9 +136,13 @@ func (p *Pusher) Stop(timeout time.Duration) {
 	numPushers := p.conf.Parallelism
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	for i := 0; i < numPushers; i++ {
-		p.stop <- timeout
-	}
+	close(p.stop)
+	defer func() {
+		close(p.stopped)
+		for _, c := range p.invokeChannels {
+			close(c)
+		}
+	}()
 	numStopped := 0
 	for {
 		select {
@@ -138,40 +159,41 @@ func (p *Pusher) Stop(timeout time.Duration) {
 	}
 }
 
-func (p *Pusher) run(id, numPushers, bufferSize int, initialRetryInterval, pushTimeout time.Duration) {
+func (p *Pusher) run(id int, invoke chan string, bufferSize int, initialRetryInterval, pushTimeout, maxLatency time.Duration) {
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
-	logPrefix := fmt.Sprintf("%s goroutine %d", p.name, id)
+	var functionARN string
+	logPrefix := fmt.Sprintf("%s-%d", p.name, id)
 	buf := new(bytes.Buffer)
 	var backoff *backoff.ExponentialBackOff
 	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	retry := make(chan struct{}, 1)
-	retryLater := func(msg string) {
+	startPushing := func(msg string) {
 		if backoff != nil {
 			return
 		}
 		log.Print(msg)
 		backoff = utils.GetExpBackoff(initialRetryInterval)
-		timer = time.AfterFunc(backoff.NextBackOff(), func() {
-			retry <- struct{}{}
-		})
+		retry <- struct{}{}
 	}
 	receivedCount := 0
 	count := 0
-
+	ticker := time.NewTicker(maxLatency)
+	defer ticker.Stop()
+	lastReceivedTime := time.Now()
 	for {
 		select {
+		case arn := <-invoke:
+			log.Printf("%s received invoke with function ARN: %s", logPrefix, arn)
+			functionARN = arn
 		case item := <-p.queue:
-			log.Printf("%s received item: %+v", logPrefix, item)
 			receivedCount++
-			runtimeDone, b, err := process(item)
-			if runtimeDone {
-				log.Printf("%s received runtime done", logPrefix)
-				for i := 0; i < numPushers; i++ {
-					// We assume no more logs will arrive until next invocation, so all pushers will receive from runtimeDone channel.
-					p.runtimeDone <- i
-				}
-				continue
-			}
+			lastReceivedTime = time.Now()
+			b, err := process(item, functionARN)
 			if err != nil {
 				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, item, err)
 				continue
@@ -182,40 +204,25 @@ func (p *Pusher) run(id, numPushers, bufferSize int, initialRetryInterval, pushT
 				buf.WriteRune('\n')
 			}
 			if buf.Len() >= bufferSize {
-				retryLater(fmt.Sprintf("%s has reached max buffer size, starting retries", logPrefix))
+				startPushing(fmt.Sprintf("%s has reached max buffer size, starting pushing", logPrefix))
 			}
-		case k := <-p.runtimeDone:
-			if k != id {
-				// This is not this goroutine's id, so put it back to the channel
-				p.runtimeDone <- k
-				continue
-			}
-			log.Printf("%s has invocation done, pushing %d logs", logPrefix, count)
-			if err := p.push(buf, pushTimeout); err != nil {
-				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
-				retryLater(fmt.Sprintf("%s has invocation done, starting retries", logPrefix))
-			} else {
-				count = 0
-				buf.Reset()
+		case t := <-ticker.C:
+			log.Printf("lastReceived : %v, current: %v", lastReceivedTime, t)
+			if buf.Len() > 0 && t.Sub(lastReceivedTime) >= maxLatency {
+				startPushing(fmt.Sprintf("%s has reached max latency, starting pushing", logPrefix))
 			}
 		case <-retry:
-			log.Printf("%s is retrying pushing %d logs", logPrefix, count)
 			if err := p.push(buf, pushTimeout); err != nil {
 				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
 				timer = time.AfterFunc(backoff.NextBackOff(), func() {
 					retry <- struct{}{}
 				})
 			} else {
-				count = 0
 				buf.Reset()
 				backoff = nil
 			}
 		case t := <-p.stop:
-			if timer != nil {
-				timer.Stop()
-			}
-			log.Printf("%s received a total of %d logs", logPrefix, receivedCount)
-			log.Printf("%s is stopped, pushing %d logs one last time", logPrefix, count)
+			log.Printf("%s received %d logs, logs to send after processing: %d", logPrefix, receivedCount, count)
 			if err := p.push(buf, t); err != nil {
 				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
 			}
@@ -234,16 +241,16 @@ func (p *Pusher) push(buf *bytes.Buffer, timeout time.Duration) error {
 	return p.makeRequestFunc(ctx, buf)
 }
 
-func process(payload lambda.LambdaLog) (bool, []byte, error) {
+func process(payload lambda.LambdaLog, functionARN string) ([]byte, error) {
 	if payload == nil {
-		return false, nil, nil
+		return nil, nil
 	}
 	logType, ok := payload["type"].(string)
 	if !ok {
-		return false, nil, fmt.Errorf("failed to find the type of the payload")
+		return nil, fmt.Errorf("failed to find the type of the payload")
 	}
 	if logType == string(lambda.RuntimeDone) {
-		return true, nil, nil
+		return nil, nil
 	} else if logType == "function" {
 		if content, ok := payload["record"].(string); ok {
 			timestamp, ok := payload["time"].(string)
@@ -253,15 +260,18 @@ func process(payload lambda.LambdaLog) (bool, []byte, error) {
 			content = strings.TrimSpace(content)
 			edLog := &EDLog{
 				Common: Common{
-					LogType:   logType,
-					Timestamp: timestamp,
+					FaasName:        functionName,
+					FaasVersion:     functionVersion,
+					CloudResourceID: functionARN,
+					LogType:         logType,
+					Timestamp:       timestamp,
 				},
 				Message: content,
 			}
 			b, err := json.Marshal(edLog)
-			return false, b, err
+			return b, err
 		}
-		return false, nil, nil
+		return nil, nil
 	} else if logType == "platform.report" {
 		// metrics format is:
 		// {"durationMs":1251.76,"billedDurationMs":1252,"memorySizeMB":128,"maxMemoryUsedMB":70,"initDurationMs":270.81}
@@ -273,8 +283,11 @@ func process(payload lambda.LambdaLog) (bool, []byte, error) {
 				}
 				edMetric := &EDMetric{
 					Common: Common{
-						LogType:   logType,
-						Timestamp: timestamp,
+						FaasName:        functionName,
+						FaasVersion:     functionVersion,
+						CloudResourceID: functionARN,
+						LogType:         logType,
+						Timestamp:       timestamp,
 					},
 					DurationMs:       metric["durationMs"].(float64),
 					BilledDurationMs: metric["billedDurationMs"].(float64),
@@ -282,12 +295,12 @@ func process(payload lambda.LambdaLog) (bool, []byte, error) {
 					MemorySize:       metric["memorySizeMB"].(float64),
 				}
 				b, err := json.Marshal(edMetric)
-				return false, b, err
+				return b, err
 			}
 		}
-		return false, nil, nil
+		return nil, nil
 	}
-	return false, nil, nil
+	return nil, nil
 }
 
 func (p *Pusher) makeHTTPRequest(ctx context.Context, buf *bytes.Buffer) error {

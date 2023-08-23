@@ -131,6 +131,7 @@ func main() {
 					log.Printf("Failed to parse Invoke event, err: %v", err)
 				} else {
 					log.Printf("Received Invoke event: %+v", invokeEvent)
+					worker.pusher.Invoke(invokeEvent.InvokedFunctionArn)
 				}
 			case lambda.Shutdown:
 				timeout := lambda.ShutdownTimeout
