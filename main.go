@@ -47,12 +47,12 @@ func startExtension() (*Worker, bool) {
 	worker.Start()
 
 	if err := lambdaClient.Subscribe(ctx, config.LogTypes, *config.BfgConfig, extensionID); err != nil {
+		worker.Stop(lambda.KillTimeout)
 		log.Printf("Failed to subscribe to Telemetry API, err: %v", err)
 		lambdaClient.InitError(ctx, extensionID, lambda.SubscribeError, lambda.LambdaError{
 			Type:    "SubscribeError",
 			Message: err.Error(),
 		})
-		worker.Stop(lambda.InitTimeout)
 		return nil, false
 	}
 	return worker, true
