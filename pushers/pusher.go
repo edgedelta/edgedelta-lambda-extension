@@ -81,7 +81,6 @@ type Pusher struct {
 	makeRequestFunc func(context.Context, *bytes.Buffer) error
 	conf            *cfg.Config
 	queue           chan lambda.LambdaLog
-	runtimeDone     chan int
 	stop            chan time.Duration
 	stopped         chan struct{}
 	invokeChannels  []chan string
@@ -184,15 +183,15 @@ func (p *Pusher) run(id int, invoke chan string, bufferSize int, initialRetryInt
 	count := 0
 	ticker := time.NewTicker(maxLatency)
 	defer ticker.Stop()
-	lastReceivedTime := time.Now()
+	var lastPushedTime time.Time
 	for {
 		select {
 		case arn := <-invoke:
 			log.Printf("%s received invoke with function ARN: %s", logPrefix, arn)
+			lastPushedTime = time.Now()
 			functionARN = arn
 		case item := <-p.queue:
 			receivedCount++
-			lastReceivedTime = time.Now()
 			b, err := process(item, functionARN)
 			if err != nil {
 				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, item, err)
@@ -207,8 +206,7 @@ func (p *Pusher) run(id int, invoke chan string, bufferSize int, initialRetryInt
 				startPushing(fmt.Sprintf("%s has reached max buffer size, starting pushing", logPrefix))
 			}
 		case t := <-ticker.C:
-			log.Printf("lastReceived : %v, current: %v", lastReceivedTime, t)
-			if buf.Len() > 0 && t.Sub(lastReceivedTime) >= maxLatency {
+			if buf.Len() > 0 && t.Sub(lastPushedTime) >= maxLatency {
 				startPushing(fmt.Sprintf("%s has reached max latency, starting pushing", logPrefix))
 			}
 		case <-retry:
@@ -218,6 +216,7 @@ func (p *Pusher) run(id int, invoke chan string, bufferSize int, initialRetryInt
 					retry <- struct{}{}
 				})
 			} else {
+				lastPushedTime = time.Now()
 				buf.Reset()
 				backoff = nil
 			}
