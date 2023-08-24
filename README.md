@@ -3,6 +3,13 @@ Edge Delta lambda extension to monitor AWS lambda functions.
 
 To run this example, you will need to ensure that your build architecture matches that of the Lambda execution environment by compiling with GOOS=linux and GOARCH=amd64 if you are not running in a Linux environment.
 
+## Scripts
+
+We have helper scripts in the `scripts` folder to publish and remove lambda extension as a lambda layer version.
+The `publish.sh` script automates the commands in the following section.
+
+## Manuel Build
+
 Building and saving package into a bin/extensions directory:
 
 ```
@@ -29,17 +36,31 @@ Supported ENV_VARIABLES for Lambda Function are:
 - PUSHER_MODE: 'http' for hosted environments, 'kinesis' for firehose stream. Defaults to 'http'.
 - ED_ENDPOINT: Hosted agents endpoint. Required if PUSHER_MODE is http.
 - KINESIS_ENDPOINT: Firehose stream endpoint. Required if PUSHER_MODE is kinesis.
-- ED_PARALLELISM: Determines the count of streamer goroutines to consume logs. Default is 1.
+- ED_PARALLELISM: Determines the count of streamer goroutines to consume logs. Default is 2.
 - ED_LAMBDA_LOG_TYPES: Which types of logs you want to get from Lambda Funcion. Options are function,platform,extension. Default is function,platform.
-- ED_BUFFER_SIZE_IN_BYTES: Buffer size of the pushers. Default is 5 * 1000 * 1000.
-- ED_PUSH_TIMEOUT_MS: is the total duration of waiting for to send one batch of logs (in milliseconds). Default is 500.
-- ED_RETRY_INTERVAL_MS: RetryInterval is the initial interval to wait until next retry (in milliseconds). It is increased exponentially until our process is shut down. Default is 10.
+- ED_LOGS_LATENCY_SEC: Maximum amount of time to buffer logs in pushers before attempting to push.
+- ED_PUSH_TIMEOUT_MS: Push timeout is the total duration of waiting for to send one batch of logs (in milliseconds). Default is 500.
+- ED_RETRY_INTERVAL_MS: RetryInterval is the initial interval to wait until next retry (in milliseconds). It is increased exponentially until our process is shut down. Default is 100.
   
 Lambda can buffer logs and deliver them to the subscriber. You can configure this behavior in the subscription request by specifying the following optional fields.
 - ED_LAMBDA_MAX_ITEMS: The maximum number of events to buffer in memory. Default: 1000. Minimum: 1000. Maximum: 10000. This is also the size of the channel that our http server writes into and pushers consume.
 - ED_LAMBDA_MAX_BYTES: The maximum size (in bytes) of the logs to buffer in memory. Default: 262144. Minimum: 262144. Maximum: 1048576.
 - ED_LAMBDA_TIMEOUT_MS: he maximum number of events to buffer in memory. Default: 1000. Minimum: 1000. Maximum: 10000.
 
+## Pushers' Logic
+
+Buffer Size of each pusher is calculated as follows:
+
+BufferSize = (2 * `Lambda_Max_Bytes` + 300 * `Lambda_Max_Items`) / `Parallelism`
+
+See the [AWS Telemetry API Docs]( https://docs.aws.amazon.com/lambda/latest/dg/telemetry-api.html) for an explanation.
+
+Pushers attempt to push when this buffer is filled, or `Logs_Latency_Sec` seconds has passed since the last push.
+If memory size is a concern, you can decrease `Logs_Latency_Sec` or increase `Parallelism`.
+
+Be aware that after function execution completes, AWS freezes the runtime environment for about 5 minutes in anticipation of another execution of the function. So the last batch of logs will arrive when another function execution happens, or AWS sends the shutdown event.
+
+## Local Test
 In your AWS Lambda container image Dockerfile, add the command below.
 ```
 $ cd bin

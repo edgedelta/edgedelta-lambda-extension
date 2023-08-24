@@ -66,7 +66,7 @@ func GetConfigAndValidate() (*Config, error) {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse PARALLELISM: %v", err))
 		}
 	} else {
-		config.Parallelism = 4
+		config.Parallelism = 2
 	}
 
 	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT_MS")
