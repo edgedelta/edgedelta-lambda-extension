@@ -3,13 +3,14 @@ package lambda
 import (
 	"fmt"
 	"net/http"
+	"time"
 )
 
 const (
 	extensionNameHeader      = "Lambda-Extension-Name"
 	extensionIdentiferHeader = "Lambda-Extension-Identifier"
 	extensionErrorType       = "Lambda-Extension-Function-Error-Type"
-	LambdaLogsEndpoint       = "2020-08-15/logs"
+	LambdaTelemetryEndpoint  = "2022-07-01/telemetry"
 	LambdaExtensionEndpoint  = "2020-01-01/extension"
 )
 
@@ -18,15 +19,6 @@ type RegisterResponse struct {
 	FunctionName    string `json:"functionName"`
 	FunctionVersion string `json:"functionVersion"`
 	Handler         string `json:"handler"`
-}
-
-// NextEventResponse is the response for /event/next
-type NextEventResponse struct {
-	EventType          ExtensionEventType `json:"eventType"`
-	DeadlineMs         int64              `json:"deadlineMs"`
-	RequestID          string             `json:"requestId"`
-	InvokedFunctionArn string             `json:"invokedFunctionArn"`
-	Tracing            Tracing            `json:"tracing"`
 }
 
 // Tracing is part of the response for /event/next
@@ -50,6 +42,31 @@ const (
 	// Shutdown is a shutdown event for the environment
 	Shutdown ExtensionEventType = "SHUTDOWN"
 )
+
+type ShutdownReasonType string
+
+const (
+	Spindown ShutdownReasonType = "spindown"
+	Timeout  ShutdownReasonType = "timeout"
+	Failure  ShutdownReasonType = "failure"
+)
+
+// NextEvent is the response for /event/next
+type NextEvent struct {
+	EventType ExtensionEventType `json:"eventType"`
+}
+
+type InvokeEvent struct {
+	DeadlineMs         int64   `json:"deadlineMs"`
+	RequestID          string  `json:"requestId"`
+	InvokedFunctionArn string  `json:"invokedFunctionArn"`
+	Tracing            Tracing `json:"tracing"`
+}
+
+type ShutdownEvent struct {
+	DeadlineMs     int64              `json:"deadlineMs"`
+	ShutdownReason ShutdownReasonType `json:"shutdownReason"`
+}
 
 const (
 	// Platform is to receive logs emitted by the platform
@@ -95,11 +112,20 @@ type Destination struct {
 	URI      URI          `json:"URI"`
 }
 
+// DefaultHttpListenerPort is used to set the URL where the logs will be sent by Telemetry API
+const DefaultHttpListenerPort = "6060"
+
+// Lambda delivers logs to a local HTTP endpoint (http://sandbox.localdomain:${PORT}/${PATH}) as an array of records in JSON format. The $PATH parameter is optional. Lambda reserves port 9001. There are no other port number restrictions or recommendations.
+var destination = Destination{
+	Protocol: HttpProto,
+	URI:      URI(fmt.Sprintf("http://sandbox:%s", DefaultHttpListenerPort)),
+}
+
 type SchemaVersion string
 
 const (
-	SchemaVersion20210318 = "2021-03-18"
-	SchemaVersionLatest   = SchemaVersion20210318
+	SchemaVersion20220701 = "2022-07-01"
+	SchemaVersionLatest   = SchemaVersion20220701
 )
 
 // SubscribeRequest is the request body that is sent to Logs API on subscribe
@@ -110,9 +136,23 @@ type SubscribeRequest struct {
 	Destination   Destination   `json:"destination"`
 }
 
-// SubscribeResponse is the response body that is received from Logs API on subscribe
-type SubscribeResponse struct {
-	body string
+const (
+	InitTimeout     = 5 * time.Second
+	ShutdownTimeout = 1 * time.Second
+	KillTimeout     = 100 * time.Millisecond
+)
+
+type FunctionErrorType string
+
+const (
+	SubscribeError FunctionErrorType = "Extension.SubscribeError"
+	RegisterError  FunctionErrorType = "Extension.RegisterError"
+	ConfigError    FunctionErrorType = "Extension.ConfigError"
+)
+
+type LambdaError struct {
+	Message string `json:"errorMessage"`
+	Type    string `json:"errorType"`
 }
 
 type LambdaLog map[string]interface{}

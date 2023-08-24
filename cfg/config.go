@@ -17,7 +17,11 @@ const (
 )
 
 var (
-	validLogTypes = map[string]bool{"function": false, "platform": false, "extension": false}
+	validLogTypes = map[string]bool{
+		"function":  false,
+		"platform":  false,
+		"extension": false,
+	}
 )
 
 // Config for storing all parameters
@@ -29,8 +33,9 @@ type Config struct {
 	BfgConfig       *lambda.BufferingCfg
 	BufferSize      int
 	Parallelism     int
-	RetryTimeout    time.Duration
-	RetryIntervals  time.Duration
+	MaxLatency      time.Duration
+	PushTimeout     time.Duration
+	RetryInterval   time.Duration
 }
 
 func GetConfigAndValidate() (*Config, error) {
@@ -61,40 +66,40 @@ func GetConfigAndValidate() (*Config, error) {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse PARALLELISM: %v", err))
 		}
 	} else {
-		config.Parallelism = 4
+		config.Parallelism = 2
 	}
 
-	bufferSize := os.Getenv("ED_BUFFER_SIZE")
-	if bufferSize != "" {
-		if i, err := strconv.ParseInt(bufferSize, 10, 0); err == nil {
-			config.BufferSize = int(i)
+	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT_MS")
+	if pushTimeout != "" {
+		if i, err := strconv.ParseInt(pushTimeout, 10, 0); err == nil {
+			config.PushTimeout = time.Duration(i) * time.Millisecond
 		} else {
-			multiErr = append(multiErr, fmt.Sprintf("Unable to parse BUFFER_SIZE: %v", err))
+			multiErr = append(multiErr, fmt.Sprintf("Unable to parse PUSH_TIMEOUT_MS: %v", err))
 		}
 	} else {
-		config.BufferSize = 100
+		config.PushTimeout = 500 * time.Millisecond
 	}
 
-	retryTimeout := os.Getenv("ED_RETRY_TIMEOUT")
-	if retryTimeout != "" {
-		if i, err := strconv.ParseInt(retryTimeout, 10, 0); err == nil {
-			config.RetryTimeout = time.Duration(i)
-		} else {
-			multiErr = append(multiErr, fmt.Sprintf("Unable to parse RETRY_TIMEOUT: %v", err))
-		}
-	} else {
-		config.RetryTimeout = 0
-	}
-
-	retryInterval := os.Getenv("ED_RETRY_INTERVAL")
+	retryInterval := os.Getenv("ED_RETRY_INTERVAL_MS")
 	if retryInterval != "" {
 		if i, err := strconv.ParseInt(retryInterval, 10, 0); err == nil {
-			config.RetryIntervals = time.Duration(i)
+			config.RetryInterval = time.Duration(i) * time.Millisecond
 		} else {
-			multiErr = append(multiErr, fmt.Sprintf("Unable to parse RETRY_INTERVAL: %v", err))
+			multiErr = append(multiErr, fmt.Sprintf("Unable to parse RETRY_INTERVAL_MS: %v", err))
 		}
 	} else {
-		config.RetryIntervals = 0
+		config.RetryInterval = 100 * time.Millisecond
+	}
+
+	maxLatency := os.Getenv("ED_LOGS_LATENCY_SEC")
+	if maxLatency != "" {
+		if i, err := strconv.ParseInt(maxLatency, 10, 0); err == nil {
+			config.MaxLatency = time.Duration(i) * time.Second
+		} else {
+			multiErr = append(multiErr, fmt.Sprintf("Unable to parse LOGS_LATENCY_SEC: %v", err))
+		}
+	} else {
+		config.MaxLatency = 10 * time.Second
 	}
 
 	config.BfgConfig = &lambda.BufferingCfg{
@@ -120,6 +125,8 @@ func GetConfigAndValidate() (*Config, error) {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse MAX_BYTES: %v", err))
 		}
 	}
+	// https://docs.aws.amazon.com/lambda/latest/dg/telemetry-api.html
+	config.BufferSize = int(2*config.BfgConfig.MaxBytes+300*config.BfgConfig.MaxItems) / config.Parallelism
 
 	timeoutMs := os.Getenv("ED_LAMBDA_TIMEOUT_MS")
 	if timeoutMs != "" {

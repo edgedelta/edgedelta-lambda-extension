@@ -6,13 +6,15 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/cenkalti/backoff"
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
 	"github.com/edgedelta/edgedelta-lambda-extension/pkg/utils"
@@ -47,11 +49,16 @@ var (
 		}
 		return &http.Client{Transport: t}
 	}
+	functionName    = os.Getenv("AWS_LAMBDA_FUNCTION_NAME")
+	functionVersion = os.Getenv("AWS_LAMBDA_FUNCTION_VERSION")
 )
 
 type Common struct {
-	Timestamp string `json:"timestamp"`
-	LogType   string `json:"log_type"`
+	FaasName        string `json:"faas.name"`
+	FaasVersion     string `json:"faas.version"`
+	CloudResourceID string `json:"cloud.resource_id"`
+	Timestamp       string `json:"timestamp"`
+	LogType         string `json:"log_type"`
 }
 
 type EDLog struct {
@@ -71,28 +78,23 @@ type Pusher struct {
 	name            string
 	logClient       *http.Client
 	kinesisClient   *firehose.Firehose
-	makeRequestFunc func(ctx context.Context, payload []byte) error
+	makeRequestFunc func(context.Context, *bytes.Buffer) error
 	conf            *cfg.Config
-	parallelism     int
-	retryInterval   time.Duration
-	retryTimeout    time.Duration
 	queue           chan lambda.LambdaLog
-	runtimeDone     chan struct{}
-	stop            chan struct{}
+	stop            chan time.Duration
 	stopped         chan struct{}
+	invokeChannels  []chan string
 }
 
 // NewPusher initialize hostedenv pusher.
 func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog) *Pusher {
+	numPushers := conf.Parallelism
 	p := &Pusher{
-		conf:          conf,
-		parallelism:   conf.Parallelism,
-		retryInterval: conf.RetryIntervals,
-		retryTimeout:  conf.RetryTimeout,
-		queue:         logQueue,
-		stop:          make(chan struct{}, conf.Parallelism),
-		stopped:       make(chan struct{}, conf.Parallelism),
-		runtimeDone:   make(chan struct{}),
+		conf:           conf,
+		queue:          logQueue,
+		stop:           make(chan time.Duration, numPushers),
+		stopped:        make(chan struct{}, numPushers),
+		invokeChannels: make([]chan string, 0, numPushers),
 	}
 	// default mode is http
 	switch conf.PusherMode {
@@ -111,121 +113,197 @@ func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaLog) *Pusher {
 
 // ConsumeParallel activates goroutines to consume logs.
 // If a shutdown or context cancel received, flush the queue and stop all operations.
-func (p *Pusher) ConsumeParallel(ctx context.Context) {
-	for i := 0; i < p.parallelism; i++ {
+func (p *Pusher) Start() {
+	numPushers := p.conf.Parallelism
+	for i := 0; i < numPushers; i++ {
 		i := i
-		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() { p.run(i, ctx) })
-	}
-	<-p.runtimeDone
-	// either runtime done or we are close to timeout, either way time to stop.
-	for i := 0; i < p.parallelism; i++ {
-		p.stop <- struct{}{}
-	}
-	// collecting goroutines
-	for i := 0; i < p.parallelism; i++ {
-		<-p.stopped
+		invoke := make(chan string, 1)
+		p.invokeChannels = append(p.invokeChannels, invoke)
+		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() {
+			p.run(i, invoke, p.conf.BufferSize, p.conf.RetryInterval, p.conf.PushTimeout, p.conf.MaxLatency)
+		})
 	}
 }
 
-func (p *Pusher) run(id int, ctx context.Context) {
-	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
+func (p *Pusher) Invoke(functionARN string) {
+	for _, c := range p.invokeChannels {
+		c <- functionARN
+	}
+}
+
+func (p *Pusher) Stop(timeout time.Duration) {
+	numPushers := p.conf.Parallelism
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	close(p.stop)
+	defer func() {
+		close(p.stopped)
+		for _, c := range p.invokeChannels {
+			close(c)
+		}
+	}()
+	numStopped := 0
 	for {
 		select {
-		case item := <-p.queue:
-			err := p.push(ctx, item)
-			if err != nil {
-				log.Printf("Error streaming data from %s, err: %v", p.name, err)
-			}
-			itemType, ok := item["type"].(string)
-			if ok && itemType == string(lambda.RuntimeDone) {
-				log.Printf("%s goroutine %d received runtime done", p.name, id)
-				p.runtimeDone <- struct{}{}
-			}
 		case <-ctx.Done():
-			log.Printf("%s goroutine %d context deadline reached", p.name, id)
-			p.runtimeDone <- struct{}{}
-		case <-p.stop:
-			log.Printf("%d goroutine stopped", id)
+			log.Printf("%d pushers failed to exit gracefully", numPushers-numStopped)
+			return
+		case <-p.stopped:
+			numStopped++
+			if numStopped == numPushers {
+				log.Printf("All pushers exited gracefully")
+				return
+			}
+		}
+	}
+}
+
+func (p *Pusher) run(id int, invoke chan string, bufferSize int, initialRetryInterval, pushTimeout, maxLatency time.Duration) {
+	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
+	var functionARN string
+	logPrefix := fmt.Sprintf("%s-%d", p.name, id)
+	buf := new(bytes.Buffer)
+	var backoff *backoff.ExponentialBackOff
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	retry := make(chan struct{}, 1)
+	startPushing := func(msg string) {
+		if backoff != nil {
+			return
+		}
+		log.Print(msg)
+		backoff = utils.GetExpBackoff(initialRetryInterval)
+		retry <- struct{}{}
+	}
+	receivedCount := 0
+	count := 0
+	ticker := time.NewTicker(maxLatency)
+	defer ticker.Stop()
+	var lastPushedTime time.Time
+	for {
+		select {
+		case arn := <-invoke:
+			log.Printf("%s received invoke with function ARN: %s", logPrefix, arn)
+			lastPushedTime = time.Now()
+			functionARN = arn
+		case item := <-p.queue:
+			receivedCount++
+			b, err := process(item, functionARN)
+			if err != nil {
+				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, item, err)
+				continue
+			}
+			if b != nil {
+				count++
+				buf.Write(b)
+				buf.WriteRune('\n')
+			}
+			if buf.Len() >= bufferSize {
+				startPushing(fmt.Sprintf("%s has reached max buffer size, starting pushing", logPrefix))
+			}
+		case t := <-ticker.C:
+			if buf.Len() > 0 && t.Sub(lastPushedTime) >= maxLatency {
+				startPushing(fmt.Sprintf("%s has reached max latency, starting pushing", logPrefix))
+			}
+		case <-retry:
+			if err := p.push(buf, pushTimeout); err != nil {
+				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
+				timer = time.AfterFunc(backoff.NextBackOff(), func() {
+					retry <- struct{}{}
+				})
+			} else {
+				lastPushedTime = time.Now()
+				buf.Reset()
+				backoff = nil
+			}
+		case t := <-p.stop:
+			log.Printf("%s received %d logs, logs to send after processing: %d", logPrefix, receivedCount, count)
+			if err := p.push(buf, t); err != nil {
+				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
+			}
 			p.stopped <- struct{}{}
 			return
 		}
 	}
 }
 
-func (p *Pusher) push(ctx context.Context, payload lambda.LambdaLog) error {
-	if payload == nil {
-		return fmt.Errorf("%s post is called with nil data", p.name)
+func (p *Pusher) push(buf *bytes.Buffer, timeout time.Duration) error {
+	if buf.Len() == 0 {
+		return nil
 	}
-	var err error
-	if p.retryInterval > 0 {
-		err = utils.DoWithExpBackoffC(ctx, func() error {
-			return p.process(ctx, payload)
-		}, p.retryInterval, p.retryTimeout)
-	} else {
-		err = p.process(ctx, payload)
-	}
-	return err
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return p.makeRequestFunc(ctx, buf)
 }
 
-func (p *Pusher) process(ctx context.Context, payload lambda.LambdaLog) error {
-	var processedLog []byte
-	var err error
-	timestamp, ok := payload["time"].(string)
-	if !ok {
-		timestamp = time.Now().UTC().Format(time.RFC3339)
+func process(payload lambda.LambdaLog, functionARN string) ([]byte, error) {
+	if payload == nil {
+		return nil, nil
 	}
 	logType, ok := payload["type"].(string)
-	if ok && logType == "function" {
+	if !ok {
+		return nil, fmt.Errorf("failed to find the type of the payload")
+	}
+	if logType == string(lambda.RuntimeDone) {
+		return nil, nil
+	} else if logType == "function" {
 		if content, ok := payload["record"].(string); ok {
+			timestamp, ok := payload["time"].(string)
+			if !ok {
+				timestamp = time.Now().UTC().Format(time.RFC3339)
+			}
 			content = strings.TrimSpace(content)
 			edLog := &EDLog{
 				Common: Common{
-					LogType:   logType,
-					Timestamp: timestamp,
+					FaasName:        functionName,
+					FaasVersion:     functionVersion,
+					CloudResourceID: functionARN,
+					LogType:         logType,
+					Timestamp:       timestamp,
 				},
 				Message: content,
 			}
-			processedLog, err = json.Marshal(edLog)
-			if err != nil {
-				log.Printf("error marshalling function log message %v, %v", edLog, err)
-				return err
-			}
+			b, err := json.Marshal(edLog)
+			return b, err
 		}
-	} else if ok && logType == "platform.report" {
+		return nil, nil
+	} else if logType == "platform.report" {
 		// metrics format is:
 		// {"durationMs":1251.76,"billedDurationMs":1252,"memorySizeMB":128,"maxMemoryUsedMB":70,"initDurationMs":270.81}
 		if content, ok := payload["record"].(map[string]interface{}); ok {
 			if metric, ok := content["metrics"].(map[string]interface{}); ok {
+				timestamp, ok := payload["time"].(string)
+				if !ok {
+					timestamp = time.Now().UTC().Format(time.RFC3339)
+				}
 				edMetric := &EDMetric{
 					Common: Common{
-						LogType:   logType,
-						Timestamp: timestamp,
+						FaasName:        functionName,
+						FaasVersion:     functionVersion,
+						CloudResourceID: functionARN,
+						LogType:         logType,
+						Timestamp:       timestamp,
 					},
 					DurationMs:       metric["durationMs"].(float64),
 					BilledDurationMs: metric["billedDurationMs"].(float64),
 					MaxMemoryUsed:    metric["maxMemoryUsedMB"].(float64),
 					MemorySize:       metric["memorySizeMB"].(float64),
 				}
-				processedLog, err = json.Marshal(edMetric)
-				if err != nil {
-					log.Printf("error marshalling platform report message %v, %v", edMetric, err)
-					return err
-				}
+				b, err := json.Marshal(edMetric)
+				return b, err
 			}
 		}
+		return nil, nil
 	}
-
-	if processedLog != nil {
-		if err := p.makeRequestFunc(ctx, processedLog); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return nil, nil
 }
 
-func (p *Pusher) makeHTTPRequest(ctx context.Context, payload []byte) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.conf.EDEndpoint, bytes.NewReader(payload))
+func (p *Pusher) makeHTTPRequest(ctx context.Context, buf *bytes.Buffer) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.conf.EDEndpoint, buf)
 	if err != nil {
 		return fmt.Errorf("failed to create http post request: %s, err: %v", p.conf.EDEndpoint, err)
 	}
@@ -234,9 +312,9 @@ func (p *Pusher) makeHTTPRequest(ctx context.Context, payload []byte) error {
 	return p.sendWithCaringResponseCode(req)
 }
 
-func (p *Pusher) makeKinesisRequest(ctx context.Context, payload []byte) error {
-	record := &firehose.Record{Data: payload}
-	_, err := p.kinesisClient.PutRecord(&firehose.PutRecordInput{
+func (p *Pusher) makeKinesisRequest(ctx context.Context, buf *bytes.Buffer) error {
+	record := &firehose.Record{Data: buf.Bytes()}
+	_, err := p.kinesisClient.PutRecordWithContext(ctx, &firehose.PutRecordInput{
 		DeliveryStreamName: aws.String(p.conf.KinesisEndpoint),
 		Record:             record,
 	})
@@ -250,7 +328,7 @@ func (p *Pusher) sendWithCaringResponseCode(req *http.Request) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		bodyBytes, err := ioutil.ReadAll(resp.Body)
+		bodyBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
 			return fmt.Errorf("%s response body read failed err: %v", p.name, err)
 		}
