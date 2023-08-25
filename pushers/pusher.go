@@ -49,25 +49,31 @@ var (
 		}
 		return &http.Client{Transport: t}
 	}
-	functionName    = os.Getenv("AWS_LAMBDA_FUNCTION_NAME")
-	functionVersion = os.Getenv("AWS_LAMBDA_FUNCTION_VERSION")
 )
 
-type Common struct {
-	FaasName        string `json:"faas.name"`
-	FaasVersion     string `json:"faas.version"`
-	CloudResourceID string `json:"cloud.resource_id"`
-	Timestamp       string `json:"timestamp"`
-	LogType         string `json:"log_type"`
+type faas struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
-type EDLog struct {
-	Common
+type cloud struct {
+	ResourceID string `json:"resource_id"`
+}
+
+type common struct {
+	Cloud     *cloud  `json:"cloud"`
+	Faas      *faas   `json:"faas"`
+	Timestamp string `json:"timestamp"`
+	LogType   string `json:"log_type"`
+}
+
+type edLog struct {
+	common
 	Message string `json:"message"`
 }
 
-type EDMetric struct {
-	Common
+type edMetric struct {
+	common
 	DurationMs       float64 `json:"duration_ms"`
 	BilledDurationMs float64 `json:"billed_duration_ms"`
 	MaxMemoryUsed    float64 `json:"max_memory_used"`
@@ -84,6 +90,11 @@ type Pusher struct {
 	stop            chan time.Duration
 	stopped         chan struct{}
 	invokeChannels  []chan string
+}
+
+var faasObj = &faas{
+	Name:    os.Getenv("AWS_LAMBDA_FUNCTION_NAME"),
+	Version: os.Getenv("AWS_LAMBDA_FUNCTION_VERSION"),
 }
 
 // NewPusher initialize hostedenv pusher.
@@ -135,9 +146,12 @@ func (p *Pusher) Stop(timeout time.Duration) {
 	numPushers := p.conf.Parallelism
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	close(p.stop)
+	for i := 0; i<numPushers; i++ {
+		p.stop <- timeout
+	}
 	defer func() {
 		close(p.stopped)
+		close(p.stop)
 		for _, c := range p.invokeChannels {
 			close(c)
 		}
@@ -160,7 +174,7 @@ func (p *Pusher) Stop(timeout time.Duration) {
 
 func (p *Pusher) run(id int, invoke chan string, bufferSize int, initialRetryInterval, pushTimeout, maxLatency time.Duration) {
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
-	var functionARN string
+	var cloudObj *cloud
 	logPrefix := fmt.Sprintf("%s-%d", p.name, id)
 	buf := new(bytes.Buffer)
 	var backoff *backoff.ExponentialBackOff
@@ -189,10 +203,10 @@ func (p *Pusher) run(id int, invoke chan string, bufferSize int, initialRetryInt
 		case arn := <-invoke:
 			log.Printf("%s received invoke with function ARN: %s", logPrefix, arn)
 			lastPushedTime = time.Now()
-			functionARN = arn
+			cloudObj = &cloud{ResourceID: arn}
 		case item := <-p.queue:
 			receivedCount++
-			b, err := process(item, functionARN)
+			b, err := process(item, cloudObj)
 			if err != nil {
 				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, item, err)
 				continue
@@ -240,7 +254,7 @@ func (p *Pusher) push(buf *bytes.Buffer, timeout time.Duration) error {
 	return p.makeRequestFunc(ctx, buf)
 }
 
-func process(payload lambda.LambdaLog, functionARN string) ([]byte, error) {
+func process(payload lambda.LambdaLog, cloudObj *cloud) ([]byte, error) {
 	if payload == nil {
 		return nil, nil
 	}
@@ -257,13 +271,12 @@ func process(payload lambda.LambdaLog, functionARN string) ([]byte, error) {
 				timestamp = time.Now().UTC().Format(time.RFC3339)
 			}
 			content = strings.TrimSpace(content)
-			edLog := &EDLog{
-				Common: Common{
-					FaasName:        functionName,
-					FaasVersion:     functionVersion,
-					CloudResourceID: functionARN,
-					LogType:         logType,
-					Timestamp:       timestamp,
+			edLog := &edLog{
+				common: common{
+					Faas:      faasObj,
+					Cloud:     cloudObj,
+					LogType:   logType,
+					Timestamp: timestamp,
 				},
 				Message: content,
 			}
@@ -280,13 +293,12 @@ func process(payload lambda.LambdaLog, functionARN string) ([]byte, error) {
 				if !ok {
 					timestamp = time.Now().UTC().Format(time.RFC3339)
 				}
-				edMetric := &EDMetric{
-					Common: Common{
-						FaasName:        functionName,
-						FaasVersion:     functionVersion,
-						CloudResourceID: functionARN,
-						LogType:         logType,
-						Timestamp:       timestamp,
+				edMetric := &edMetric{
+					common: common{
+						Faas:      faasObj,
+						Cloud:     cloudObj,
+						LogType:   logType,
+						Timestamp: timestamp,
 					},
 					DurationMs:       metric["durationMs"].(float64),
 					BilledDurationMs: metric["billedDurationMs"].(float64),
