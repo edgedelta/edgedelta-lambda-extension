@@ -146,9 +146,12 @@ func (p *Pusher) Stop(timeout time.Duration) {
 	numPushers := p.conf.Parallelism
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	close(p.stop)
+	for i := 0; i<numPushers; i++ {
+		p.stop <- timeout
+	}
 	defer func() {
 		close(p.stopped)
+		close(p.stop)
 		for _, c := range p.invokeChannels {
 			close(c)
 		}
