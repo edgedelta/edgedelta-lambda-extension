@@ -45,7 +45,7 @@ Supported ENV_VARIABLES for Lambda Function are:
 Lambda can buffer logs and deliver them to the subscriber. You can configure this behavior in the subscription request by specifying the following optional fields.
 - ED_LAMBDA_MAX_ITEMS: The maximum number of events to buffer in memory. Default: 1000. Minimum: 1000. Maximum: 10000. This is also the size of the channel that our http server writes into and pushers consume.
 - ED_LAMBDA_MAX_BYTES: The maximum size (in bytes) of the logs to buffer in memory. Default: 262144. Minimum: 262144. Maximum: 1048576.
-- ED_LAMBDA_TIMEOUT_MS: he maximum number of events to buffer in memory. Default: 1000. Minimum: 1000. Maximum: 10000.
+- ED_LAMBDA_TIMEOUT_MS: he maximum time (in milliseconds) to buffer a batch. Default: 1000. Minimum: 25. Maximum: 30000.
 
 ## Pushers' Logic
 
