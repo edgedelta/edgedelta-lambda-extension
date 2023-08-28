@@ -68,24 +68,6 @@ type ShutdownEvent struct {
 	ShutdownReason ShutdownReasonType `json:"shutdownReason"`
 }
 
-const (
-	// Platform is to receive logs emitted by the platform
-	Platform string = "platform"
-	// Function is to receive logs emitted by the function
-	Function string = "function"
-	// Extension is to receive logs emitted by the extension
-	Extension string = "extension"
-)
-
-type SubEventType string
-
-const (
-	// RuntimeDone event is sent when lambda function is finished it's execution
-	RuntimeDone    SubEventType = "platform.runtimeDone"
-	RuntimeEnd     SubEventType = "platform.end"
-	PlatformReport SubEventType = "platform.report"
-)
-
 // BufferingCfg is the configuration set for receiving logs from Logs API. Whichever of the conditions below is met first, the logs will be sent
 type BufferingCfg struct {
 	// MaxItems is the maximum number of events to be buffered in memory. (default: 10000, minimum: 1000, maximum: 10000)
@@ -155,7 +137,29 @@ type LambdaError struct {
 	Type    string `json:"errorType"`
 }
 
-type LambdaLog map[string]interface{}
+type EventType string
+
+const (
+	PlatformInitStart             EventType = "platform.initStart"
+	PlatformInitRuntimeDone       EventType = "platform.initRuntimeDone"
+	PlatformInitReport            EventType = "platform.initReport"
+	PlatformStart                 EventType = "platform.start"
+	PlatformRuntimeDone           EventType = "platform.runtimeDone" // RuntimeDone event is sent when lambda function is finished it's execution
+	PlatformReport                EventType = "platform.report"
+	PlatformRestoreStart          EventType = "platform.restoreStart"
+	PlatformRestoreRuntimeDone    EventType = "platform.restoreRuntimeDone"
+	PlatformRestoreReport         EventType = "platform.restoreReport"
+	PlatformTelemetrySubscription EventType = "platform.telemetrySubscription"
+	PlatformLogsDropped           EventType = "platform.logsDropped"
+	Function                      EventType = "function"
+	Extension                     EventType = "extension"
+)
+
+type LambdaEvent struct {
+	EventTime string      `json:"time"`
+	EventType EventType   `json:"type"`
+	Record    interface{} `json:"record"`
+}
 
 // Client is the client used to interact with the Lambda API Endpoints
 type Client struct {

@@ -67,7 +67,7 @@ type Worker struct {
 
 func NewWorker(config *cfg.Config, extensionID string) *Worker {
 	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
-	queue := make(chan lambda.LambdaLog, config.BfgConfig.MaxItems)
+	queue := make(chan lambda.LambdaEvent, config.BfgConfig.MaxItems)
 	producer := handlers.NewProducer(queue)
 	pusher := pushers.NewPusher(config, queue)
 	return &Worker{
