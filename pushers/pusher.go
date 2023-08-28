@@ -138,7 +138,8 @@ func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent) *Pusher {
 // ConsumeParallel activates goroutines to consume logs.
 // If a shutdown or context cancel received, flush the queue and stop all operations.
 func (p *Pusher) Start() {
-
+	log.Printf("Starting %d pushers with buffer size: %d bytes, retryInterval: %v, pushTimeout: %v, maxLatency: %v",
+		p.numPushers, p.bufferSize, p.retryInterval, p.pushTimeout, p.maxLatency)
 	for i := 0; i < p.numPushers; i++ {
 		i := i
 		invoke := make(chan string, 1)
@@ -158,6 +159,7 @@ func (p *Pusher) Invoke(functionARN string) {
 }
 
 func (p *Pusher) RuntimeDone() {
+	log.Printf("Function invocation finished")
 	for _, c := range p.runtimeDoneChannels {
 		c <- struct{}{}
 	}
@@ -244,13 +246,13 @@ func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
 				buf.WriteRune('\n')
 			}
 			if buf.Len() >= p.bufferSize {
-				startPushing(fmt.Sprintf("%s has reached max buffer size, starting pushing", logPrefix))
+				startPushing(fmt.Sprintf("%s has reached max buffer size, pushing", logPrefix))
 			}
 		case <-runtimeDone:
-			startPushing(fmt.Sprintf("%s received runtime done event, starting pushing", logPrefix))
+			startPushing(fmt.Sprintf("%s received runtime done event, pushing", logPrefix))
 		case t := <-ticker.C:
 			if buf.Len() > 0 && t.Sub(lastPushedTime) >= p.maxLatency {
-				startPushing(fmt.Sprintf("%s has reached max latency, starting pushing", logPrefix))
+				startPushing(fmt.Sprintf("%s has reached max latency, pushing", logPrefix))
 			}
 		case <-retry:
 			if err := p.push(buf, p.pushTimeout); err != nil {
@@ -259,12 +261,13 @@ func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
 					retry <- struct{}{}
 				})
 			} else {
+				log.Printf("%s pushed logs", logPrefix)
 				lastPushedTime = time.Now()
 				buf.Reset()
 				backoff = nil
 			}
 		case t := <-p.stop:
-			log.Printf("%s received %d logs, logs to send after processing: %d", logPrefix, receivedCount, count)
+			log.Printf("%s received %d logs, logs sent after processing: %d", logPrefix, receivedCount, count)
 			if err := p.push(buf, t); err != nil {
 				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
 			}
