@@ -16,11 +16,13 @@ import (
 type Producer struct {
 	server *http.Server
 	queue  chan lambda.LambdaEvent
+	runtimeDoneChannels []chan struct{}
 }
 
-func NewProducer(queue chan lambda.LambdaEvent) *Producer {
+func NewProducer(queue chan lambda.LambdaEvent, runtimeDoneChannels []chan struct{}) *Producer {
 	return &Producer{
 		queue: queue,
+		runtimeDoneChannels: runtimeDoneChannels,
 	}
 }
 
@@ -61,6 +63,13 @@ func (p *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, item := range lambdaLogs {
+		if item.EventType == lambda.PlatformRuntimeDone {
+			log.Printf("Function invocation done")
+			for _, c := range p.runtimeDoneChannels {
+				c <- struct{}{}
+			}
+			continue
+		}
 		p.queue <- item
 	}
 }

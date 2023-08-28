@@ -104,7 +104,7 @@ var faasObj = &faas{
 }
 
 // NewPusher initialize hostedenv pusher.
-func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent) *Pusher {
+func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent, runtimeDoneChannels []chan struct{}) *Pusher {
 	numPushers := conf.Parallelism
 	p := &Pusher{
 		queue:               logQueue,
@@ -116,7 +116,7 @@ func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent) *Pusher {
 		stop:                make(chan time.Duration, numPushers),
 		stopped:             make(chan struct{}, numPushers),
 		invokeChannels:      make([]chan string, 0, numPushers),
-		runtimeDoneChannels: make([]chan struct{}, 0, numPushers),
+		runtimeDoneChannels: runtimeDoneChannels,
 	}
 	// default mode is http
 	switch conf.PusherMode {
@@ -144,10 +144,9 @@ func (p *Pusher) Start() {
 		i := i
 		invoke := make(chan string, 1)
 		p.invokeChannels = append(p.invokeChannels, invoke)
-		runtimeDone := make(chan struct{}, 1)
-		p.runtimeDoneChannels = append(p.runtimeDoneChannels, runtimeDone)
+		
 		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() {
-			p.run(i, invoke, runtimeDone)
+			p.run(i, invoke, p.runtimeDoneChannels[i])
 		})
 	}
 }
@@ -155,13 +154,6 @@ func (p *Pusher) Start() {
 func (p *Pusher) Invoke(functionARN string) {
 	for _, c := range p.invokeChannels {
 		c <- functionARN
-	}
-}
-
-func (p *Pusher) RuntimeDone() {
-	log.Printf("Function invocation finished")
-	for _, c := range p.runtimeDoneChannels {
-		c <- struct{}{}
 	}
 }
 
@@ -175,9 +167,6 @@ func (p *Pusher) Stop(timeout time.Duration) {
 		close(p.stopped)
 		close(p.stop)
 		for _, c := range p.invokeChannels {
-			close(c)
-		}
-		for _, c := range p.runtimeDoneChannels {
 			close(c)
 		}
 	}()
@@ -229,10 +218,6 @@ func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
 			lastPushedTime = time.Now()
 			cloudObj = &cloud{ResourceID: arn}
 		case event := <-p.queue:
-			if event.EventType == lambda.PlatformRuntimeDone {
-				p.RuntimeDone()
-				continue
-			}
 			b, err := process(event, cloudObj)
 			if err != nil {
 				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, event, err)
