@@ -218,7 +218,6 @@ func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
 		backoff = utils.GetExpBackoff(p.retryInterval)
 		retry <- struct{}{}
 	}
-	receivedCount := 0
 	count := 0
 	ticker := time.NewTicker(p.maxLatency)
 	defer ticker.Stop()
@@ -230,7 +229,6 @@ func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
 			lastPushedTime = time.Now()
 			cloudObj = &cloud{ResourceID: arn}
 		case event := <-p.queue:
-			receivedCount++
 			if event.EventType == lambda.PlatformRuntimeDone {
 				p.RuntimeDone()
 				continue
@@ -246,15 +244,16 @@ func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
 				buf.WriteRune('\n')
 			}
 			if buf.Len() >= p.bufferSize {
-				startPushing(fmt.Sprintf("%s has reached max buffer size, pushing", logPrefix))
+				startPushing(fmt.Sprintf("%s has reached max buffer size", logPrefix))
 			}
 		case <-runtimeDone:
-			startPushing(fmt.Sprintf("%s received runtime done event, pushing", logPrefix))
+			startPushing(fmt.Sprintf("%s received runtime done event", logPrefix))
 		case t := <-ticker.C:
 			if buf.Len() > 0 && t.Sub(lastPushedTime) >= p.maxLatency {
-				startPushing(fmt.Sprintf("%s has reached max latency, pushing", logPrefix))
+				startPushing(fmt.Sprintf("%s has reached max latency", logPrefix))
 			}
 		case <-retry:
+			log.Printf("%s is pushing %d logs", logPrefix, count)
 			if err := p.push(buf, p.pushTimeout); err != nil {
 				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
 				timer = time.AfterFunc(backoff.NextBackOff(), func() {
@@ -264,12 +263,15 @@ func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
 				log.Printf("%s pushed logs", logPrefix)
 				lastPushedTime = time.Now()
 				buf.Reset()
+				count = 0
 				backoff = nil
 			}
 		case t := <-p.stop:
-			log.Printf("%s received %d logs, logs sent after processing: %d", logPrefix, receivedCount, count)
-			if err := p.push(buf, t); err != nil {
-				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
+			if count > 0 {
+				log.Printf("%s is pushing %d logs", logPrefix, count)
+				if err := p.push(buf, t); err != nil {
+					log.Printf("%s failed to push logs, err: %v", logPrefix, err)
+				}
 			}
 			p.stopped <- struct{}{}
 			return
