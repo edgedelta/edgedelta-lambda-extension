@@ -17,6 +17,8 @@ const (
 )
 
 var (
+	awsDefaultRegion = os.Getenv("AWS_DEFAULT_REGION")
+	awsRegion        = os.Getenv("AWS_REGION")
 	validLogTypes = map[string]bool{
 		"function":  false,
 		"platform":  false,
@@ -37,6 +39,9 @@ type Config struct {
 	MaxLatency      time.Duration
 	PushTimeout     time.Duration
 	RetryInterval   time.Duration
+	Tags            map[string]string
+	Region          string
+	FunctionARN     string
 }
 
 func GetConfigAndValidate() (*Config, error) {
@@ -58,7 +63,11 @@ func GetConfigAndValidate() (*Config, error) {
 	if config.KinesisEndpoint == "" && config.PusherMode == KINESIS_PUSHER {
 		return nil, errors.New("KINESIS_ENDPOINT must be set as environment variable when PUSHER_MODE is set to kinesis")
 	}
-
+	region := awsRegion
+	if region == "" {
+		region = awsDefaultRegion
+	}
+	config.Region = region
 	parallelism := os.Getenv("ED_PARALLELISM")
 	if parallelism != "" {
 		if i, err := strconv.ParseInt(parallelism, 10, 0); err == nil {

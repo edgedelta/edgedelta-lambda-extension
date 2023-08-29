@@ -88,6 +88,7 @@ type Pusher struct {
 	makeRequestFunc     func(context.Context, *bytes.Buffer) error
 	endpoint            string
 	tags                map[string]string
+	cloud               *cloud
 	numPushers          int
 	bufferSize          int
 	retryInterval       time.Duration
@@ -96,7 +97,6 @@ type Pusher struct {
 	queue               chan lambda.LambdaEvent
 	stop                chan time.Duration
 	stopped             chan struct{}
-	invokeChannels      []chan string
 	runtimeDoneChannels []chan struct{}
 }
 
@@ -106,19 +106,19 @@ var faasObj = &faas{
 }
 
 // NewPusher initialize hostedenv pusher.
-func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent, runtimeDoneChannels []chan struct{}, tags map[string]string) *Pusher {
+func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent, runtimeDoneChannels []chan struct{}) *Pusher {
 	numPushers := conf.Parallelism
 	p := &Pusher{
 		queue:               logQueue,
 		numPushers:          numPushers,
-		tags:                tags,
+		tags:                conf.Tags,
+		cloud:               &cloud{ResourceID: conf.FunctionARN},
 		bufferSize:          conf.BufferSize,
 		retryInterval:       conf.RetryInterval,
 		pushTimeout:         conf.PushTimeout,
 		maxLatency:          conf.MaxLatency,
 		stop:                make(chan time.Duration, numPushers),
 		stopped:             make(chan struct{}, numPushers),
-		invokeChannels:      make([]chan string, 0, numPushers),
 		runtimeDoneChannels: runtimeDoneChannels,
 	}
 	// default mode is http
@@ -145,18 +145,9 @@ func (p *Pusher) Start() {
 		p.numPushers, p.bufferSize, p.retryInterval, p.pushTimeout, p.maxLatency)
 	for i := 0; i < p.numPushers; i++ {
 		i := i
-		invoke := make(chan string, 1)
-		p.invokeChannels = append(p.invokeChannels, invoke)
-
 		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() {
-			p.run(i, invoke, p.runtimeDoneChannels[i])
+			p.run(i, p.runtimeDoneChannels[i])
 		})
-	}
-}
-
-func (p *Pusher) Invoke(functionARN string) {
-	for _, c := range p.invokeChannels {
-		c <- functionARN
 	}
 }
 
@@ -169,9 +160,6 @@ func (p *Pusher) Stop(timeout time.Duration) {
 	defer func() {
 		close(p.stopped)
 		close(p.stop)
-		for _, c := range p.invokeChannels {
-			close(c)
-		}
 	}()
 	numStopped := 0
 	for {
@@ -189,9 +177,8 @@ func (p *Pusher) Stop(timeout time.Duration) {
 	}
 }
 
-func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
+func (p *Pusher) run(id int, runtimeDone chan struct{}) {
 	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
-	var cloudObj *cloud
 	logPrefix := fmt.Sprintf("%s-%d", p.name, id)
 	buf := new(bytes.Buffer)
 	var backoff *backoff.ExponentialBackOff
@@ -216,12 +203,8 @@ func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
 	var lastPushedTime time.Time
 	for {
 		select {
-		case arn := <-invoke:
-			log.Printf("%s received invoke with function ARN: %s", logPrefix, arn)
-			lastPushedTime = time.Now()
-			cloudObj = &cloud{ResourceID: arn}
 		case event := <-p.queue:
-			b, err := process(event, cloudObj, p.tags)
+			b, err := process(event, p.cloud, p.tags)
 			if err != nil {
 				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, event, err)
 				continue
