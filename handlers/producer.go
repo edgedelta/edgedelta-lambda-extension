@@ -15,12 +15,14 @@ import (
 // Producer is used to listen to the Logs API using HTTP
 type Producer struct {
 	server *http.Server
-	queue  chan lambda.LambdaLog
+	queue  chan lambda.LambdaEvent
+	runtimeDoneChannels []chan struct{}
 }
 
-func NewProducer(queue chan lambda.LambdaLog) *Producer {
+func NewProducer(queue chan lambda.LambdaEvent, runtimeDoneChannels []chan struct{}) *Producer {
 	return &Producer{
 		queue: queue,
+		runtimeDoneChannels: runtimeDoneChannels,
 	}
 }
 
@@ -54,13 +56,20 @@ func (p *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Puts the log message into the queue
-	var lambdaLogs []lambda.LambdaLog
+	var lambdaLogs []lambda.LambdaEvent
 	if err = json.Unmarshal(body, &lambdaLogs); err != nil {
 		log.Printf("error unmarshalling log message %s, %v", string(body), err)
 		return
 	}
 
 	for _, item := range lambdaLogs {
+		if item.EventType == lambda.PlatformRuntimeDone {
+			log.Printf("Function invocation done")
+			for _, c := range p.runtimeDoneChannels {
+				c <- struct{}{}
+			}
+			continue
+		}
 		p.queue <- item
 	}
 }

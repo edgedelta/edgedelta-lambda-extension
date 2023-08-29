@@ -63,17 +63,24 @@ type Worker struct {
 	ExtensionID string
 	pusher      *pushers.Pusher
 	producer    *handlers.Producer
+	runtimeDoneChannels []chan struct{}
 }
 
 func NewWorker(config *cfg.Config, extensionID string) *Worker {
 	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
-	queue := make(chan lambda.LambdaLog, config.BfgConfig.MaxItems)
-	producer := handlers.NewProducer(queue)
-	pusher := pushers.NewPusher(config, queue)
+	numPushers := config.Parallelism
+	runtimeDoneChannels := make([]chan struct{}, 0, numPushers)
+	for i:=0; i<numPushers; i++ {
+		runtimeDoneChannels = append(runtimeDoneChannels, make(chan struct{}, 1))
+	}
+	queue := make(chan lambda.LambdaEvent, config.BfgConfig.MaxItems)
+	producer := handlers.NewProducer(queue, runtimeDoneChannels)
+	pusher := pushers.NewPusher(config, queue, runtimeDoneChannels)
 	return &Worker{
 		ExtensionID: extensionID,
 		producer:    producer,
 		pusher:      pusher,
+		runtimeDoneChannels: runtimeDoneChannels,
 	}
 
 }
@@ -87,6 +94,9 @@ func (w *Worker) Stop(timeout time.Duration) {
 	t := timeout - 1*time.Millisecond
 	w.producer.Shutdown(t)
 	w.pusher.Stop(t)
+	for _, c:= range w.runtimeDoneChannels {
+		close(c)
+	}
 }
 
 func main() {
