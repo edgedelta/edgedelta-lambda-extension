@@ -7,11 +7,13 @@ import (
 )
 
 const (
-	extensionNameHeader      = "Lambda-Extension-Name"
-	extensionIdentiferHeader = "Lambda-Extension-Identifier"
-	extensionErrorType       = "Lambda-Extension-Function-Error-Type"
-	LambdaTelemetryEndpoint  = "2022-07-01/telemetry"
-	LambdaExtensionEndpoint  = "2020-01-01/extension"
+	extensionNameHeader          = "Lambda-Extension-Name"
+	extensionAcceptFeatureHeader = "Lambda-Extension-Accept-Feature"
+	extensionAccountID           = "accountId"
+	extensionIdentiferHeader     = "Lambda-Extension-Identifier"
+	extensionErrorType           = "Lambda-Extension-Function-Error-Type"
+	LambdaTelemetryEndpoint      = "2022-07-01/telemetry"
+	LambdaExtensionEndpoint      = "2020-01-01/extension"
 )
 
 // RegisterResponse is the body of the response for /register
@@ -19,6 +21,7 @@ type RegisterResponse struct {
 	FunctionName    string `json:"functionName"`
 	FunctionVersion string `json:"functionVersion"`
 	Handler         string `json:"handler"`
+	AccountID       string `json:"accountId"`
 }
 
 // Tracing is part of the response for /event/next
@@ -130,6 +133,7 @@ const (
 	SubscribeError FunctionErrorType = "Extension.SubscribeError"
 	RegisterError  FunctionErrorType = "Extension.RegisterError"
 	ConfigError    FunctionErrorType = "Extension.ConfigError"
+	ClientError    FunctionErrorType = "Extension.ClientError"
 )
 
 type LambdaError struct {

@@ -29,6 +29,7 @@ type Config struct {
 	EDEndpoint      string
 	KinesisEndpoint string
 	PusherMode      string
+	ForwardTags     bool
 	LogTypes        []string
 	BfgConfig       *lambda.BufferingCfg
 	BufferSize      int
@@ -36,6 +37,9 @@ type Config struct {
 	MaxLatency      time.Duration
 	PushTimeout     time.Duration
 	RetryInterval   time.Duration
+	Tags            map[string]string
+	Region          string
+	FunctionARN     string
 }
 
 func GetConfigAndValidate() (*Config, error) {
@@ -57,7 +61,7 @@ func GetConfigAndValidate() (*Config, error) {
 	if config.KinesisEndpoint == "" && config.PusherMode == KINESIS_PUSHER {
 		return nil, errors.New("KINESIS_ENDPOINT must be set as environment variable when PUSHER_MODE is set to kinesis")
 	}
-
+	config.Region = os.Getenv("AWS_REGION")
 	parallelism := os.Getenv("ED_PARALLELISM")
 	if parallelism != "" {
 		if i, err := strconv.ParseInt(parallelism, 10, 0); err == nil {
@@ -67,6 +71,12 @@ func GetConfigAndValidate() (*Config, error) {
 		}
 	} else {
 		config.Parallelism = 2
+	}
+
+	config.ForwardTags = false
+	forwardTags := os.Getenv("ED_FORWARD_LAMBDA_TAGS")
+	if forwardTags != "" {
+		config.ForwardTags = true
 	}
 
 	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT_MS")
