@@ -134,6 +134,55 @@ func (w *Worker) Stop(timeout time.Duration) {
 		close(c)
 	}
 }
+func waitSignals(cancel context.CancelFunc, worker *Worker, stop chan struct{}) {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
+	s := <-sigs
+	log.Println("Received signal:", s)
+	cancel()
+	worker.Stop(lambda.KillTimeout)
+	stop <- struct{}{}
+}
+
+func handleInvocations(ctx context.Context, worker *Worker, stop chan struct{}) {
+	// The For loop will wait for an Invoke or Shutdown event and sleep until one of them comes with Nextevent().
+	for {
+		// This statement signals to lambda that the extension is ready for warm restart and
+		// will work until a timeout occurs or runtime crashes. Next invoke will start from here
+		eventType, eventBody, err := lambdaClient.NextEvent(context.Background(), worker.ExtensionID)
+		if err == context.Canceled {
+			return
+		}
+		if err != nil {
+			log.Printf("Error during Next Event call: %v", err)
+			continue
+		}
+		log.Printf("Received next event type: %s", eventType)
+		switch eventType {
+		case lambda.Invoke:
+			invokeEvent, err := lambda.GetInvokeEvent(eventBody)
+			if err != nil {
+				log.Printf("Failed to parse Invoke event, err: %v", err)
+			} else {
+				log.Printf("Received Invoke event: %+v", invokeEvent)
+			}
+		case lambda.Shutdown:
+			timeout := lambda.ShutdownTimeout
+			shutdownEvent, err := lambda.GetShutdownEvent(eventBody)
+			if err != nil {
+				log.Printf("Failed to parse Shutdown event, err: %v", err)
+			} else {
+				log.Printf("Received Shutdown event: %+v", shutdownEvent)
+				timeout = time.Duration(shutdownEvent.DeadlineMs) * time.Millisecond
+			}
+			worker.Stop(timeout)
+			stop <- struct{}{}
+			return
+		default:
+			log.Printf("Received unexpected event type: %s", eventType)
+		}
+	}
+}
 
 func main() {
 	log.SetPrefix("[Edge Delta] ")
@@ -143,55 +192,8 @@ func main() {
 		os.Exit(1)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sigs := make(chan os.Signal, 1)
-	// todo could not trigger these signals on basic lambda functions -> maybe try with a long polling one
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		s := <-sigs
-		log.Println("Received signal:", s)
-		cancel()
-	}()
-
-	// The For loop will wait for an Invoke or Shutdown event and sleep until one of them comes with Nextevent().
-	for {
-		select {
-		case <-ctx.Done():
-			log.Printf("Shutting down Edge Delta extension, context done.")
-			// added this sleep for debug purposes. See goroutine stopped logs before returning.
-			worker.Stop(lambda.KillTimeout)
-			return
-		default:
-			// This statement signals to lambda that the extension is ready for warm restart and
-			// will work until a timeout occurs or runtime crashes. Next invoke will start from here
-			eventType, eventBody, err := lambdaClient.NextEvent(ctx, worker.ExtensionID)
-			if err != nil {
-				log.Printf("Error during Next Event call: %v", err)
-				continue
-			}
-			log.Printf("Received next event type: %s", eventType)
-			switch eventType {
-			case lambda.Invoke:
-				invokeEvent, err := lambda.GetInvokeEvent(eventBody)
-				if err != nil {
-					log.Printf("Failed to parse Invoke event, err: %v", err)
-				} else {
-					log.Printf("Received Invoke event: %+v", invokeEvent)
-				}
-			case lambda.Shutdown:
-				timeout := lambda.ShutdownTimeout
-				shutdownEvent, err := lambda.GetShutdownEvent(eventBody)
-				if err != nil {
-					log.Printf("Failed to parse Shutdown event, err: %v", err)
-				} else {
-					log.Printf("Received Shutdown event: %+v", shutdownEvent)
-					timeout = time.Duration(shutdownEvent.DeadlineMs) * time.Millisecond
-				}
-				worker.Stop(timeout)
-				return
-			default:
-				log.Printf("Received unexpected event type: %s", eventType)
-			}
-		}
-	}
+	stop := make(chan struct{})
+	go handleInvocations(ctx, worker, stop)
+	go waitSignals(cancel, worker, stop)
+	<- stop
 }

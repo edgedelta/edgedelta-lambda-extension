@@ -123,7 +123,7 @@ type SubscribeRequest struct {
 
 const (
 	InitTimeout     = 5 * time.Second
-	ShutdownTimeout = 1 * time.Second
+	ShutdownTimeout = 1500 * time.Millisecond
 	KillTimeout     = 100 * time.Millisecond
 )
 
