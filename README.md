@@ -36,7 +36,7 @@ Supported ENV_VARIABLES for Lambda Function are:
 - PUSHER_MODE: 'http' for hosted environments, 'kinesis' for firehose stream. Defaults to 'http'.
 - ED_ENDPOINT: Hosted agents endpoint. Required if PUSHER_MODE is http.
 - KINESIS_ENDPOINT: Firehose stream endpoint. Required if PUSHER_MODE is kinesis.
-- ED_FORWARD_LAMBDA_TAGS: If set to any nonempty value, logs are enriched with lambda tags (in the field "lambda_tags")
+- ED_FORWARD_LAMBDA_TAGS: If set to a nonempty value, logs are enriched with lambda tags (in the field "lambda_tags"). Lambda function role needs to have lambda:ListTags permission.
 - ED_PARALLELISM: Determines the count of streamer goroutines to consume logs. Default is 2.
 - ED_LAMBDA_LOG_TYPES: Which types of logs you want to get from Lambda Funcion. Options are function,platform,extension. Default is function,platform.
 - ED_LOGS_LATENCY_SEC: Maximum amount of time to buffer logs in pushers before attempting to push.
