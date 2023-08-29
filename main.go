@@ -19,12 +19,13 @@ var (
 	// Lambda uses the full file name of the extension to validate that the extension has completed the bootstrap sequence.
 	extensionName = path.Base(os.Args[0])
 	lambdaClient  = lambda.NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API"))
+
 )
 
 func startExtension() (*Worker, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), lambda.InitTimeout)
 	defer cancel()
-	extensionID, err := lambdaClient.Register(ctx, extensionName)
+	extensionID, registerResp, err := lambdaClient.Register(ctx, extensionName)
 	if err != nil {
 		log.Printf("Failed to register the extension, err: %v", err)
 		lambdaClient.InitError(ctx, extensionID, lambda.RegisterError, lambda.LambdaError{
@@ -43,7 +44,32 @@ func startExtension() (*Worker, bool) {
 		})
 		return nil, false
 	}
-	worker := NewWorker(config, extensionID)
+	var tags map[string]string
+	if config.ForwardTags {
+		awsClient, err := lambda.NewAWSClient()
+		if err !=nil {
+			log.Printf("Failed to create AWS Lambda Client, err: %v", err)
+			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
+				Type:    "CreateClientError",
+				Message: err.Error(),
+			})
+			return nil, false
+		}
+		resp, err := awsClient.GetTags(registerResp)
+		if err !=nil {
+			log.Printf("Failed to get Lambda Tags, err: %v", err)
+			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
+				Type:    "GetTagsError",
+				Message: err.Error(),
+			})
+			return nil, false
+		}
+		tags = make(map[string]string, len(resp.Tags))
+		for k, v := range resp.Tags {
+			tags[k] = *v
+		}
+	}
+	worker := NewWorker(config, extensionID, tags)
 	worker.Start()
 
 	if err := lambdaClient.Subscribe(ctx, config.LogTypes, *config.BfgConfig, extensionID); err != nil {
@@ -66,7 +92,7 @@ type Worker struct {
 	runtimeDoneChannels []chan struct{}
 }
 
-func NewWorker(config *cfg.Config, extensionID string) *Worker {
+func NewWorker(config *cfg.Config, extensionID string, tags map[string]string) *Worker {
 	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
 	numPushers := config.Parallelism
 	runtimeDoneChannels := make([]chan struct{}, 0, numPushers)
@@ -75,7 +101,7 @@ func NewWorker(config *cfg.Config, extensionID string) *Worker {
 	}
 	queue := make(chan lambda.LambdaEvent, config.BfgConfig.MaxItems)
 	producer := handlers.NewProducer(queue, runtimeDoneChannels)
-	pusher := pushers.NewPusher(config, queue, runtimeDoneChannels)
+	pusher := pushers.NewPusher(config, queue, runtimeDoneChannels, tags)
 	return &Worker{
 		ExtensionID: extensionID,
 		producer:    producer,
@@ -85,8 +111,8 @@ func NewWorker(config *cfg.Config, extensionID string) *Worker {
 
 }
 func (w *Worker) Start() {
-	w.producer.Start()
 	w.pusher.Start()
+	w.producer.Start()
 }
 
 func (w *Worker) Stop(timeout time.Duration) {

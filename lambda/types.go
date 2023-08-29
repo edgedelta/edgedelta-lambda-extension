@@ -130,6 +130,7 @@ const (
 	SubscribeError FunctionErrorType = "Extension.SubscribeError"
 	RegisterError  FunctionErrorType = "Extension.RegisterError"
 	ConfigError    FunctionErrorType = "Extension.ConfigError"
+	ClientError    FunctionErrorType = "Extension.ClientError"
 )
 
 type LambdaError struct {

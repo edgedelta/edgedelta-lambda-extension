@@ -10,7 +10,7 @@ import (
 )
 
 // Register will register the extension with the Extensions API
-func (e *Client) Register(ctx context.Context, filename string) (string, error) {
+func (e *Client) Register(ctx context.Context, filename string) (string, *RegisterResponse, error) {
 	const action = "register"
 	url := fmt.Sprintf("%s/%s/%s", e.baseUrl, LambdaExtensionEndpoint, action)
 
@@ -18,32 +18,32 @@ func (e *Client) Register(ctx context.Context, filename string) (string, error) 
 		"events": []ExtensionEventType{Invoke, Shutdown},
 	})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(reqBody))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	httpReq.Header.Set(extensionNameHeader, filename)
 	httpRes, err := e.httpClient.Do(httpReq)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if httpRes.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("request failed with status %s", httpRes.Status)
+		return "", nil, fmt.Errorf("request failed with status %s", httpRes.Status)
 	}
 	defer httpRes.Body.Close()
 	body, err := io.ReadAll(httpRes.Body)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	res := RegisterResponse{}
+	var res RegisterResponse
 	err = json.Unmarshal(body, &res)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	extensionId := httpRes.Header.Get(extensionIdentiferHeader)
-	return extensionId, nil
+	return extensionId, &res, nil
 }
 
 // NextEvent blocks while long polling for the next lambda invoke or shutdown

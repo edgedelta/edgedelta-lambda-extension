@@ -61,10 +61,11 @@ type cloud struct {
 }
 
 type common struct {
-	Cloud     *cloud           `json:"cloud"`
-	Faas      *faas            `json:"faas"`
-	Timestamp string           `json:"timestamp"`
-	LogType   lambda.EventType `json:"log_type"`
+	Cloud      *cloud            `json:"cloud"`
+	Faas       *faas             `json:"faas"`
+	Timestamp  string            `json:"timestamp"`
+	LogType    lambda.EventType  `json:"log_type"`
+	LambdaTags map[string]string `json:"lambda_tags,omitempty"`
 }
 
 type edLog struct {
@@ -86,6 +87,7 @@ type Pusher struct {
 	kinesisClient       *firehose.Firehose
 	makeRequestFunc     func(context.Context, *bytes.Buffer) error
 	endpoint            string
+	tags                map[string]string
 	numPushers          int
 	bufferSize          int
 	retryInterval       time.Duration
@@ -104,11 +106,12 @@ var faasObj = &faas{
 }
 
 // NewPusher initialize hostedenv pusher.
-func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent, runtimeDoneChannels []chan struct{}) *Pusher {
+func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent, runtimeDoneChannels []chan struct{}, tags map[string]string) *Pusher {
 	numPushers := conf.Parallelism
 	p := &Pusher{
 		queue:               logQueue,
 		numPushers:          numPushers,
+		tags:                tags,
 		bufferSize:          conf.BufferSize,
 		retryInterval:       conf.RetryInterval,
 		pushTimeout:         conf.PushTimeout,
@@ -144,7 +147,7 @@ func (p *Pusher) Start() {
 		i := i
 		invoke := make(chan string, 1)
 		p.invokeChannels = append(p.invokeChannels, invoke)
-		
+
 		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() {
 			p.run(i, invoke, p.runtimeDoneChannels[i])
 		})
@@ -218,7 +221,7 @@ func (p *Pusher) run(id int, invoke chan string, runtimeDone chan struct{}) {
 			lastPushedTime = time.Now()
 			cloudObj = &cloud{ResourceID: arn}
 		case event := <-p.queue:
-			b, err := process(event, cloudObj)
+			b, err := process(event, cloudObj, p.tags)
 			if err != nil {
 				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, event, err)
 				continue
@@ -273,7 +276,7 @@ func (p *Pusher) push(buf *bytes.Buffer, timeout time.Duration) error {
 	return p.makeRequestFunc(ctx, buf)
 }
 
-func process(event lambda.LambdaEvent, cloudObj *cloud) ([]byte, error) {
+func process(event lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
 	eventType := event.EventType
 	timestamp := event.EventTime
 	record := event.Record
@@ -284,10 +287,11 @@ func process(event lambda.LambdaEvent, cloudObj *cloud) ([]byte, error) {
 			content = strings.TrimSpace(content)
 			edLog := &edLog{
 				common: common{
-					Faas:      faasObj,
-					Cloud:     cloudObj,
-					LogType:   eventType,
-					Timestamp: timestamp,
+					Faas:       faasObj,
+					Cloud:      cloudObj,
+					LogType:    eventType,
+					LambdaTags: tags,
+					Timestamp:  timestamp,
 				},
 				Message: content,
 			}
@@ -301,10 +305,11 @@ func process(event lambda.LambdaEvent, cloudObj *cloud) ([]byte, error) {
 			if metric, ok := content["metrics"].(map[string]interface{}); ok {
 				edMetric := &edMetric{
 					common: common{
-						Faas:      faasObj,
-						Cloud:     cloudObj,
-						LogType:   eventType,
-						Timestamp: timestamp,
+						Faas:       faasObj,
+						Cloud:      cloudObj,
+						LogType:    eventType,
+						LambdaTags: tags,
+						Timestamp:  timestamp,
 					},
 					DurationMs:       metric["durationMs"].(float64),
 					BilledDurationMs: metric["billedDurationMs"].(float64),

@@ -29,6 +29,7 @@ type Config struct {
 	EDEndpoint      string
 	KinesisEndpoint string
 	PusherMode      string
+	ForwardTags     bool
 	LogTypes        []string
 	BfgConfig       *lambda.BufferingCfg
 	BufferSize      int
@@ -67,6 +68,12 @@ func GetConfigAndValidate() (*Config, error) {
 		}
 	} else {
 		config.Parallelism = 2
+	}
+
+	config.ForwardTags = false
+	forwardTags := os.Getenv("ED_FORWARD_LAMBDA_TAGS")
+	if forwardTags != "" {
+		config.ForwardTags = true
 	}
 
 	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT_MS")
