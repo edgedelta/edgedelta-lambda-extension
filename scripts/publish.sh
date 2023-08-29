@@ -8,6 +8,7 @@ name="ed-extension-layer"
 ext_path="bin/extensions/$name"
 zip_name="extension.zip"
 
+rm -rf bin
 mkdir -p "bin/extensions"
 
 GOOS=linux GOARCH=amd64 go build -o "$ext_path" main.go
