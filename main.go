@@ -134,6 +134,7 @@ func (w *Worker) Stop(timeout time.Duration) {
 		close(c)
 	}
 }
+
 func waitSignals(cancel context.CancelFunc, worker *Worker, stop chan struct{}) {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
@@ -150,12 +151,9 @@ func handleInvocations(ctx context.Context, worker *Worker, stop chan struct{}) 
 		// This statement signals to lambda that the extension is ready for warm restart and
 		// will work until a timeout occurs or runtime crashes. Next invoke will start from here
 		eventType, eventBody, err := lambdaClient.NextEvent(context.Background(), worker.ExtensionID)
-		if err == context.Canceled {
-			return
-		}
 		if err != nil {
-			log.Printf("Error during Next Event call: %v", err)
-			continue
+			log.Printf("Failed to get next event, err: %v", err)
+			return
 		}
 		log.Printf("Received next event type: %s", eventType)
 		switch eventType {
@@ -195,5 +193,5 @@ func main() {
 	stop := make(chan struct{})
 	go handleInvocations(ctx, worker, stop)
 	go waitSignals(cancel, worker, stop)
-	<- stop
+	<-stop
 }
