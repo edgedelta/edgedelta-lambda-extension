@@ -6,10 +6,10 @@ environment=$1
 arch_type=$2
 version=$3
 
-bucket_name="ed-dev-serverless-repository"
+bucket_name=$ED_DEV_SERVERLESS_REPOSITORY_BUCKET
 # if environment is prod then use prod bucket
 if [ "$environment" == "prod" ]; then
-    bucket_name="ed-serverless-repository"
+    bucket_name=$ED_SERVERLESS_REPOSITORY_BUCKET
 fi
 
 if [ -z "$arch_type" ]; then
