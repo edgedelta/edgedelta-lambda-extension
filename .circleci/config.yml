@@ -1,0 +1,87 @@
+version: 2.1
+
+executors:
+  edimg-build:
+    docker:
+      - image: 233765244907.dkr.ecr.us-west-2.amazonaws.com/build:latest
+  cimg-base:
+    docker:
+      - image: cimg/base:stable
+
+jobs:
+  get_approval:
+    executor: cimg-base
+    environment:
+      APPROVAL_CHECK_PERIOD: 10     # seconds
+      APPROVAL_MAX_ATTEMPT: 720     # 2 hours
+    steps:
+      - checkout
+      - run:
+          name: Wait for approval
+          command: |
+            export RELEASE_NAME="${CIRCLE_TAG}"
+            export RELEASE_TYPE="lambda-extension"
+            ./deploy/jira_get_approval.sh
+      - persist_to_workspace:       # to be used by jira_notify_result.sh
+          root: /tmp/workspace
+          paths:
+          - approval-ticket-id
+            
+  build_and_publish:
+    executor: edimg-build
+    parameters:
+      arch-type:
+        type: string
+        default: "amd64"
+    steps:
+      - checkout
+      - run:
+          name: Build lambda extension
+          command: |
+            ./deploy/build.sh "prod" "<< parameters.arch-type >>" "${CIRCLE_TAG#v}"
+      - run:
+          name: Publish lambda extension
+          command: |
+            ./deploy/publish.sh "prod" "<< parameters.arch-type >>" "${CIRCLE_TAG#v}"
+
+  release_succes:
+    executor: cimg-base
+    steps:
+      - checkout
+      - attach_workspace:
+          at: /tmp/workspace
+      - run:
+          name: Send api release success
+          command: |
+            SUCCESS=1 ./build/jira_notify_result.sh
+      - run:
+          name: Send api release failure
+          when: on_fail
+          command: |
+            ./scripts/post_to_slack.sh "$CIRCLE_JOB failed. See job logs at $CIRCLE_BUILD_URL" || true
+            SUCCESS=0 ./build/jira_notify_result.sh
+
+workflows:
+  lambda_extension_release:
+    jobs:
+      - get_approval: &lambda_extension_release_filter
+          context: main
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^v\d+\.\d+\.\d+$/
+      - build_and_publish:
+          <<: *lambda_extension_release_filter
+          matrix:
+            parameters:
+              arch-type:
+                - "amd64"
+                - "arm64"
+          name: build_and_publish_<< matrix.arch-type >>
+          requires:
+            - get_approval
+      - release_succes:
+          <<: *lambda_extension_release_filter
+          requires:
+            - build_and_publish
