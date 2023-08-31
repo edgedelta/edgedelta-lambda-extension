@@ -22,8 +22,6 @@ Resources:
   LambdaLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
-      LayerName: edgedelta-lambda-extension
+      LayerName: edgedelta-lambda-extension-{ARCH_TYPE_LOWER}
       Description: Edge Delta lambda extension to monitor AWS lambda functions.
       ContentUri: s3://{BUCKET}/{FILE_NAME}
-      CompatibleRuntimes:
-        - go1.x

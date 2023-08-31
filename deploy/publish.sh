@@ -13,7 +13,7 @@ if [ "$environment" == "prod" ]; then
 fi
 
 
-ARCH_TYPE="ARM"
+ARCH_TYPE="ARM64"
 if [ "$arch_type" == "amd64" ]; then
     ARCH_TYPE="AMD64"
 fi
@@ -24,6 +24,7 @@ cat template.yml.tmpl \
 | sed "s|{BUCKET}|$bucket_name|g" \
 | sed "s|{VERSION}|$version|g" \
 | sed "s|{FILE_NAME}|$file_name|g" \
+| sed "s|{ARCH_TYPE_LOWER}|$arch_type|g" \
 > template.yml
 
 echo "Packaging SAM template"
