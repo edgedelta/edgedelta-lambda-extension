@@ -10,7 +10,7 @@
 # JIRA_TOKEN_OWNER: username of the owner of the jira token
 # JIRA_API_TOKEN: jira api token
 # SUCCESS: if set 1 notify success else notify failure.
-set -ex
+set -e
 
 # Constants
 base_uri=https://edgedelta.atlassian.net/rest/api/2/issue

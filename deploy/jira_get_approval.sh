@@ -22,7 +22,7 @@
 # JIRA_API_TOKEN: jira api token
 # RELEASE_NAME: Release version
 
-set -ex
+set -e
 
 # Constants
 base_uri=https://edgedelta.atlassian.net/rest/api/2/issue
