@@ -65,7 +65,6 @@ workflows:
   lambda_extension_release:
     jobs:
       - get_approval: &lambda_extension_release_filter
-          context: main
           filters:
             branches:
               ignore: /.*/
