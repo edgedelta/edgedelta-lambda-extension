@@ -70,7 +70,7 @@ func GetConfigAndValidate() (*Config, error) {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse PARALLELISM: %v", err))
 		}
 	} else {
-		config.Parallelism = 2
+		config.Parallelism = 4
 	}
 
 	config.ForwardTags = false

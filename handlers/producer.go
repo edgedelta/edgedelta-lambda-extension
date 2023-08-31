@@ -50,8 +50,10 @@ func (p *Producer) Start() {
 // Otherwise, logging here will cause Logs API to send new logs for the printed lines which will create an infinite loop.
 func (p *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
 	if err != nil {
 		log.Printf("Error reading body: %+v", err)
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -59,6 +61,7 @@ func (p *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	var lambdaLogs []lambda.LambdaEvent
 	if err = json.Unmarshal(body, &lambdaLogs); err != nil {
 		log.Printf("error unmarshalling log message %s, %v", string(body), err)
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
@@ -72,6 +75,7 @@ func (p *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		p.queue <- item
 	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // Terminates the HTTP server listening for logs
