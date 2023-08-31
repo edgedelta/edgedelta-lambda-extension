@@ -17,7 +17,7 @@ ARCH_TYPE="ARM"
 if [ "$arch_type" == "amd64" ]; then
     ARCH_TYPE="AMD64"
 fi
-file_name="extension_${arch_type}_${version}.zip"
+file_name="layer_${arch_type}_${version}.zip"
 
 cat template.yml.tmpl \
 | sed "s|{ARCH_TYPE}|$ARCH_TYPE|g" \
