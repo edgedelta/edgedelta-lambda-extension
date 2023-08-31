@@ -1,10 +1,10 @@
 Metadata:
   AWS::ServerlessRepo::Application:
-    Name: Edge Delta Lambda Extension {ARCH_TYPE}
+    Name: EdgeDelta-Lambda-Extension-Layer-{ARCH_TYPE}
     Description: Edge Delta lambda extension to monitor AWS lambda functions.
     Author: Edge Delta
-    ReadmeUrl: https://github.com/edgedelta/edgedelta-lambda-extension/blob/master/README.md
-    LicenseUrl: https://github.com/edgedelta/edgedelta-lambda-extension/blob/master/LICENSE
+    ReadmeUrl: README.md
+    LicenseUrl: LICENSE
     SpdxLicenseId: Apache-2.0
     HomePageUrl: https://github.com/edgedelta/edgedelta-lambda-extension
     SemanticVersion: {VERSION}
@@ -23,6 +23,6 @@ Resources:
     Properties:
       LayerName: edgedelta-lambda-extension
       Description: Edge Delta lambda extension to monitor AWS lambda functions.
-      ContentUri: s3://{BUCKET}/{FILE_NAME}.zip
+      ContentUri: s3://{BUCKET}/{FILE_NAME}
       CompatibleRuntimes:
         - go1.x

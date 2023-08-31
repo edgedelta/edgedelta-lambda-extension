@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -ex
+set -e
 set -o nounset
 
 environment=$1
@@ -27,7 +27,7 @@ cat template.yml.tmpl \
 > template.yml
 
 echo "Packaging SAM template"
-sam package --output-template-file packaged.yaml --s3-bucket $bucket_name --template-file template.yaml
+sam package --output-template-file packaged.yaml --s3-bucket $bucket_name --template-file template.yml
 
 echo "Publishing SAM template"
 sam publish --template packaged.yaml --region $AWS_DEFAULT_REGION

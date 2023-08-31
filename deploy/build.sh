@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -ex
+set -e
 set -o nounset
 
 environment=$1
@@ -22,7 +22,6 @@ if [ -z "$version" ]; then
     exit 1
 fi
 
-region="us-west-2"
 project_root=$(git rev-parse --show-toplevel)
 name="edgedelta-extension-layer-${arch_type}"
 ext_path="bin/extensions/$name"
