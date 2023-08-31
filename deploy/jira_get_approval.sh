@@ -25,7 +25,7 @@
 set -e
 
 # Constants
-base_uri=https://edgedelta.atlassian.net/rest/api/2/issue
+base_uri=https://${JIRA_URL}/rest/api/2/issue
 project_key="AP"
 
 # Jira issue statuses in worflow
@@ -34,7 +34,7 @@ project_key="AP"
 #   -u $JIRA_TOKEN_OWNER:$JIRA_API_TOKEN \
 #   -X GET \
 #   -H "Content-Type: application/json" \
-#   https://edgedelta.atlassian.net/rest/api/2/status
+#   https://$JIRA_URL/rest/api/2/status
 status_approved_id=400
 status_closed_id=6
 status_waiting_id=10003

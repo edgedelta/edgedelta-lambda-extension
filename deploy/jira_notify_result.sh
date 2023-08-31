@@ -13,7 +13,7 @@
 set -e
 
 # Constants
-base_uri=https://edgedelta.atlassian.net/rest/api/2/issue
+base_uri=https://$JIRA_URL/rest/api/2/issue
 project_key="AP"
 
 # Jira transitions in workflow
