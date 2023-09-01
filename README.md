@@ -1,6 +1,10 @@
 # Introduction
 Edge Delta Lambda Extension Layer to monitor AWS lambda functions. You can deploy this extension as a lambda layer by deploying ƒrom the AWS Serverless Application Repository. After you deploy the extension, you can add it to your lambda function as a layer to monitor your lambda function logs.
 
+ARNs:
+- arn:aws:serverlessrepo:us-west-2:233765244907:applications/EdgeDelta-Lambda-Extension-Layer-AMD64
+- arn:aws:serverlessrepo:us-west-2:233765244907:applications/EdgeDelta-Lambda-Extension-Layer-ARM64
+
 ## Environment Variables
 
 - PUSHER_MODE: 'http' for hosted environments, 'kinesis' for firehose stream. Defaults to 'http'.
