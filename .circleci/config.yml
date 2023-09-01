@@ -54,13 +54,13 @@ jobs:
       - run:
           name: Send api release success
           command: |
-            SUCCESS=1 ./build/jira_notify_result.sh
+            SUCCESS=1 ./deploy/jira_notify_result.sh
       - run:
           name: Send api release failure
           when: on_fail
           command: |
-            ./scripts/post_to_slack.sh "$CIRCLE_JOB failed. See job logs at $CIRCLE_BUILD_URL" || true
-            SUCCESS=0 ./build/jira_notify_result.sh
+            ./deploy/post_to_slack.sh "$CIRCLE_JOB failed. See job logs at $CIRCLE_BUILD_URL" || true
+            SUCCESS=0 ./deploy/jira_notify_result.sh
 
 workflows:
   lambda_extension_release:
