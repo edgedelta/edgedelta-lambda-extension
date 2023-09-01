@@ -27,6 +27,11 @@ jobs:
           root: /tmp/workspace
           paths:
           - approval-ticket-id
+      - run:
+          when: on_fail
+          command: |
+            ./deploy/post_to_slack.sh "$CIRCLE_JOB failed. See job logs at $CIRCLE_BUILD_URL" || true
+            SUCCESS=0 ./deploy/jira_notify_result.sh
             
   build_and_publish:
     executor: edimg-build
@@ -44,6 +49,11 @@ jobs:
           name: Publish lambda extension
           command: |
             ./deploy/publish.sh "prod" "<< parameters.arch-type >>" "${CIRCLE_TAG#v}"
+      - run:
+          when: on_fail
+          command: |
+            ./deploy/post_to_slack.sh "$CIRCLE_JOB failed. See job logs at $CIRCLE_BUILD_URL" || true
+            SUCCESS=0 ./deploy/jira_notify_result.sh
 
   release_success:
     executor: cimg-base
