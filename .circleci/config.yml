@@ -19,6 +19,7 @@ jobs:
       - run:
           name: Wait for approval
           command: |
+            mkdir -p /tmp/workspace
             export RELEASE_NAME="${CIRCLE_TAG}"
             export RELEASE_TYPE="lambda-extension"
             ./deploy/jira_get_approval.sh
