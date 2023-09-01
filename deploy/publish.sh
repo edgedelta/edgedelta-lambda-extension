@@ -13,15 +13,15 @@ if [ "$environment" == "prod" ]; then
 fi
 
 
-ARCH_TYPE="ARM64"
-if [ "$arch_type" == "amd64" ]; then
-    ARCH_TYPE="AMD64"
+ARCH_TYPE="AMD64"
+if [ "$arch_type" == "arm64" ]; then
+    ARCH_TYPE="ARM64"
 fi
 file_name="layer_${arch_type}_${version}.zip"
 
-compatible_arch="arm64"
-if [ "$arch_type" == "amd64" ]; then
-    compatible_arch="x86_64"
+compatible_arch="x86_64"
+if [ "$arch_type" == "arm64" ]; then
+    compatible_arch="arm64"
 fi
 
 cat template.yml.tmpl \
