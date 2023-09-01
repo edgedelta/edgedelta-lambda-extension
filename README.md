@@ -1,37 +1,7 @@
-# edgedelta-lambda-extension
-Edge Delta lambda extension to monitor AWS lambda functions.
+# Introduction
+Edge Delta Lambda Extension Layer to monitor AWS lambda functions. You can deploy this extension as a lambda layer by deploying ƒrom the AWS Serverless Application Repository. After you deploy the extension, you can add it to your lambda function as a layer to monitor your lambda function logs.
 
-To run this example, you will need to ensure that your build architecture matches that of the Lambda execution environment by compiling with GOOS=linux and GOARCH=amd64 if you are not running in a Linux environment.
-
-## Scripts
-
-We have helper scripts in the `scripts` folder to publish and remove lambda extension as a lambda layer version.
-The `publish.sh` script automates the commands in the following section.
-
-## Manuel Build
-
-Building and saving package into a bin/extensions directory:
-
-```
-$ cd edgedelta-lambda-extension
-$ GOOS=linux GOARCH=amd64 go build -o bin/extensions/edgedelta-lambda-extension main.go
-$ chmod +x bin/extensions/edgedelta-lambda-extension
-```
-
-The extensions .zip file should contain a root directory called extensions/, where the extension executables are located.
-
-```
-$ cd bin
-$ zip -r extension.zip extensions/
-```
-
-Publish a new layer using the extension.zip and capture the produced layer arn in layer_arn.
-
-```
-aws lambda publish-layer-version --layer-name "edgedelta-lambda-extension" --region "<use your region>" --zip-file  "fileb://extension.zip" | jq -r '.LayerVersionArn'
-```
-
-Supported ENV_VARIABLES for Lambda Function are:
+## Environment Variables
 
 - PUSHER_MODE: 'http' for hosted environments, 'kinesis' for firehose stream. Defaults to 'http'.
 - ED_ENDPOINT: Hosted agents endpoint. Required if PUSHER_MODE is http.
@@ -60,6 +30,35 @@ Pushers attempt to push when this buffer is filled, or `Logs_Latency_Sec` second
 If memory size is a concern, you can decrease `Logs_Latency_Sec` or increase `Parallelism`.
 
 Be aware that after function execution completes, AWS freezes the runtime environment for about 5 minutes in anticipation of another execution of the function. So the last batch of logs will arrive when another function execution happens, or AWS sends the shutdown event.
+
+
+## Manuel Build
+You can also build the extension manually and publish it as a lambda layer version. 
+
+We have helper scripts in the `scripts` folder to publish and remove lambda extension as a lambda layer version. The `publish.sh` script automates the commands in the following section.
+
+To run this example, you will need to ensure that your build architecture matches that of the Lambda execution environment by compiling with GOOS=linux and GOARCH=amd64 if you are not running in a Linux environment.
+
+Building and saving package into a bin/extensions directory:
+
+```
+$ cd edgedelta-lambda-extension
+$ GOOS=linux GOARCH=amd64 go build -o bin/extensions/edgedelta-lambda-extension main.go
+$ chmod +x bin/extensions/edgedelta-lambda-extension
+```
+
+The extensions .zip file should contain a root directory called extensions/, where the extension executables are located.
+
+```
+$ cd bin
+$ zip -r extension.zip extensions/
+```
+
+Publish a new layer using the extension.zip and capture the produced layer arn in layer_arn.
+
+```
+aws lambda publish-layer-version --layer-name "edgedelta-lambda-extension" --region "<use your region>" --zip-file  "fileb://extension.zip" | jq -r '.LayerVersionArn'
+```
 
 ## Local Test
 In your AWS Lambda container image Dockerfile, add the command below.
