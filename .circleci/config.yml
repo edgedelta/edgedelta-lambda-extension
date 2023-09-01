@@ -44,7 +44,7 @@ jobs:
           command: |
             ./deploy/publish.sh "prod" "<< parameters.arch-type >>" "${CIRCLE_TAG#v}"
 
-  release_succes:
+  release_success:
     executor: cimg-base
     steps:
       - checkout
