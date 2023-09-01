@@ -19,12 +19,18 @@ if [ "$arch_type" == "amd64" ]; then
 fi
 file_name="layer_${arch_type}_${version}.zip"
 
+compatible_arch="arm64"
+if [ "$arch_type" == "amd64" ]; then
+    compatible_arch="x86_64"
+fi
+
 cat template.yml.tmpl \
 | sed "s|{ARCH_TYPE}|$ARCH_TYPE|g" \
 | sed "s|{BUCKET}|$bucket_name|g" \
 | sed "s|{VERSION}|$version|g" \
 | sed "s|{FILE_NAME}|$file_name|g" \
 | sed "s|{ARCH_TYPE_LOWER}|$arch_type|g" \
+| sed "s|{COMPATIBLE_ARCHITECTURE}|$compatible_arch|g" \
 > template.yml
 
 echo "Packaging SAM template"
