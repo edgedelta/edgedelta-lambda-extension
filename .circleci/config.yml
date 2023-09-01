@@ -80,7 +80,7 @@ workflows:
           name: build_and_publish_<< matrix.arch-type >>
           requires:
             - get_approval
-      - release_succes:
+      - release_success:
           <<: *lambda_extension_release_filter
           requires:
             - build_and_publish
