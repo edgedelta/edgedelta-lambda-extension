@@ -15,14 +15,12 @@ import (
 // Producer is used to listen to the Logs API using HTTP
 type Producer struct {
 	server *http.Server
-	queue  chan lambda.LambdaEvent
-	runtimeDoneChannels []chan struct{}
+	outC   chan []*lambda.LambdaEvent
 }
 
-func NewProducer(queue chan lambda.LambdaEvent, runtimeDoneChannels []chan struct{}) *Producer {
+func NewProducer(outC chan []*lambda.LambdaEvent) *Producer {
 	return &Producer{
-		queue: queue,
-		runtimeDoneChannels: runtimeDoneChannels,
+		outC: outC,
 	}
 }
 
@@ -36,7 +34,7 @@ func (p *Producer) Start() {
 		err := p.server.ListenAndServe()
 		if err != http.ErrServerClosed {
 			log.Printf("Unexpected stop on Http Server, err: %v", err)
-			p.Shutdown(lambda.KillTimeout)
+			p.Shutdown(10 * time.Millisecond)
 		} else {
 			log.Printf("Http Server closed")
 		}
@@ -45,7 +43,7 @@ func (p *Producer) Start() {
 
 // handleLogs handles the requests coming from the Telemetry API.
 // Everytime Logs API sends logs, this function will read the logs from the response body
-// and put them into a synchronous queue to be read by the main goroutine.
+// and put them into a synchronous queue to be read by the processor goroutine.
 // Logging or printing besides the error cases below is not recommended if you have subscribed to receive extension logs.
 // Otherwise, logging here will cause Logs API to send new logs for the printed lines which will create an infinite loop.
 func (p *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
@@ -57,24 +55,14 @@ func (p *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Puts the log message into the queue
-	var lambdaLogs []lambda.LambdaEvent
-	if err = json.Unmarshal(body, &lambdaLogs); err != nil {
+	var events []*lambda.LambdaEvent
+	if err = json.Unmarshal(body, &events); err != nil {
 		log.Printf("error unmarshalling log message %s, %v", string(body), err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-
-	for _, item := range lambdaLogs {
-		if item.EventType == lambda.PlatformRuntimeDone {
-			log.Printf("Function invocation done")
-			for _, c := range p.runtimeDoneChannels {
-				c <- struct{}{}
-			}
-			continue
-		}
-		p.queue <- item
-	}
+	log.Printf("handler received %d events", len(events))
+	p.outC <- events
 	w.WriteHeader(http.StatusOK)
 }
 

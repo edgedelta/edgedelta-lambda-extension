@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
 	"path"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -16,10 +19,13 @@ import (
 	"github.com/edgedelta/edgedelta-lambda-extension/pushers"
 )
 
+const invocationTimeoutGracePeriod = 50 * time.Millisecond
+
 var (
 	// Lambda uses the full file name of the extension to validate that the extension has completed the bootstrap sequence.
-	extensionName = path.Base(os.Args[0])
-	lambdaClient  = lambda.NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API"))
+	extensionName      = path.Base(os.Args[0])
+	lambdaClient       = lambda.NewClient(os.Getenv("AWS_LAMBDA_RUNTIME_API"))
+	printExtensionLogs = os.Getenv("ED_PRINT_EXTENSION_LOGS")
 )
 
 func buildFunctionARN(registerResp *lambda.RegisterResponse, region string) string {
@@ -29,6 +35,11 @@ func buildFunctionARN(registerResp *lambda.RegisterResponse, region string) stri
 }
 
 func startExtension() (*Worker, bool) {
+	if printExtensionLogs == "true" {
+		log.SetOutput(io.Discard)
+	}
+	log.SetPrefix("[Edge Delta] ")
+	log.Println("Starting edgedelta extension")
 	ctx, cancel := context.WithTimeout(context.Background(), lambda.InitTimeout)
 	defer cancel()
 	extensionID, registerResp, err := lambdaClient.Register(ctx, extensionName)
@@ -96,43 +107,63 @@ func startExtension() (*Worker, bool) {
 }
 
 type Worker struct {
-	ExtensionID         string
-	pusher              *pushers.Pusher
-	producer            *handlers.Producer
-	runtimeDoneChannels []chan struct{}
+	ExtensionID string
+	pusher      *pushers.Pusher
+	producer    *handlers.Producer
+	processor   *pushers.Processor
+	stopping    atomic.Bool
 }
 
 func NewWorker(config *cfg.Config, extensionID string) *Worker {
-	// Starting all producer and pusher goroutines here to make sure they will not be restarted by a warm runtime restart.
-	numPushers := config.Parallelism
-	runtimeDoneChannels := make([]chan struct{}, 0, numPushers)
-	for i := 0; i < numPushers; i++ {
-		runtimeDoneChannels = append(runtimeDoneChannels, make(chan struct{}, 1))
-	}
-	queue := make(chan lambda.LambdaEvent, config.BfgConfig.MaxItems)
-	producer := handlers.NewProducer(queue, runtimeDoneChannels)
-	pusher := pushers.NewPusher(config, queue, runtimeDoneChannels)
+	logC := make(chan []*lambda.LambdaEvent)
+	bufferC := make(chan *bytes.Buffer)
+	pusher := pushers.NewPusher(config, bufferC)
+	processor := pushers.NewProcessor(config, bufferC, logC)
+	producer := handlers.NewProducer(logC)
+
 	return &Worker{
-		ExtensionID:         extensionID,
-		producer:            producer,
-		pusher:              pusher,
-		runtimeDoneChannels: runtimeDoneChannels,
+		ExtensionID: extensionID,
+		producer:    producer,
+		pusher:      pusher,
+		processor:   processor,
 	}
 
 }
 func (w *Worker) Start() {
 	w.pusher.Start()
+	w.processor.Start()
 	w.producer.Start()
 }
 
-func (w *Worker) Stop(timeout time.Duration) {
-	// give a smaller timeout, so we finish gracefully
-	t := timeout - 1*time.Millisecond
-	w.producer.Shutdown(t)
-	w.pusher.Stop(t)
-	for _, c := range w.runtimeDoneChannels {
-		close(c)
+func (w *Worker) Invoke(e *lambda.InvokeEvent) {
+	timeout := time.Duration(e.DeadlineMs-time.Now().UnixMilli())*time.Millisecond - invocationTimeoutGracePeriod
+	log.Printf("Invocation starts with timeout: %v", timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	doneC := make(chan struct{})
+	w.pusher.Invoke(ctx, doneC)
+	w.processor.Invoke(e)
+	select {
+	case <-ctx.Done():
+		return
+	case <-doneC:
+		return
 	}
+}
+
+func (w *Worker) Stop(timeout time.Duration) bool {
+	if w.stopping.CompareAndSwap(false, true) {
+		log.Printf("Stopping with timeout: %v", timeout)
+		timeout = timeout - 20*time.Millisecond
+		deadline := time.Now().Add(timeout)
+		time.Sleep(timeout / 3)
+		w.producer.Shutdown(timeout / 4)
+		w.processor.Stop()
+		w.pusher.Stop(time.Until(deadline))
+		log.Printf("Extension stopped")
+		return true
+	}
+	return false
 }
 
 func waitSignals(cancel context.CancelFunc, worker *Worker, stop chan struct{}) {
@@ -141,7 +172,9 @@ func waitSignals(cancel context.CancelFunc, worker *Worker, stop chan struct{}) 
 	s := <-sigs
 	log.Println("Received signal:", s)
 	cancel()
-	worker.Stop(lambda.KillTimeout)
+	if !worker.Stop(lambda.KillTimeout) { // Already stopping
+		time.Sleep(lambda.KillTimeout)
+	}
 	stop <- struct{}{}
 }
 
@@ -150,7 +183,7 @@ func handleInvocations(ctx context.Context, worker *Worker, stop chan struct{}) 
 	for {
 		// This statement signals to lambda that the extension is ready for warm restart and
 		// will work until a timeout occurs or runtime crashes. Next invoke will start from here
-		eventType, eventBody, err := lambdaClient.NextEvent(context.Background(), worker.ExtensionID)
+		eventType, eventBody, err := lambdaClient.NextEvent(ctx, worker.ExtensionID)
 		if err != nil {
 			log.Printf("Failed to get next event, err: %v", err)
 			return
@@ -164,6 +197,8 @@ func handleInvocations(ctx context.Context, worker *Worker, stop chan struct{}) 
 			} else {
 				log.Printf("Received Invoke event: %+v", invokeEvent)
 			}
+			// Blocking call
+			worker.Invoke(invokeEvent)
 		case lambda.Shutdown:
 			timeout := lambda.ShutdownTimeout
 			shutdownEvent, err := lambda.GetShutdownEvent(eventBody)
@@ -171,7 +206,7 @@ func handleInvocations(ctx context.Context, worker *Worker, stop chan struct{}) 
 				log.Printf("Failed to parse Shutdown event, err: %v", err)
 			} else {
 				log.Printf("Received Shutdown event: %+v", shutdownEvent)
-				timeout = time.Duration(shutdownEvent.DeadlineMs) * time.Millisecond
+				timeout = time.Duration(shutdownEvent.DeadlineMs-time.Now().UnixMilli()) * time.Millisecond
 			}
 			worker.Stop(timeout)
 			stop <- struct{}{}
@@ -183,8 +218,6 @@ func handleInvocations(ctx context.Context, worker *Worker, stop chan struct{}) 
 }
 
 func main() {
-	log.SetPrefix("[Edge Delta] ")
-	log.Println("Starting edgedelta extension")
 	worker, ok := startExtension()
 	if !ok {
 		os.Exit(1)

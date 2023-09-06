@@ -4,25 +4,26 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
-	"github.com/cenkalti/backoff"
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
-	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
-	"github.com/edgedelta/edgedelta-lambda-extension/pkg/utils"
+	"github.com/edgedelta/edgedelta-lambda-extension/utils"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/firehose"
 )
+
+// Start dropping logs after payloads exceed maxNumberOfPayloadsToKeep
+// Logs might be dropped if endpoint cannot be reached
+
+const maxNumberOfPayloadsToKeep = 10
+const flushTimeout = 5 * time.Second
 
 var (
 	newHTTPClientFunc = func() *http.Client {
@@ -51,75 +52,35 @@ var (
 	}
 )
 
-type faas struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-}
-
-type cloud struct {
-	ResourceID string `json:"resource_id"`
-}
-
-type common struct {
-	Cloud      *cloud            `json:"cloud"`
-	Faas       *faas             `json:"faas"`
-	Timestamp  string            `json:"timestamp"`
-	LogType    lambda.EventType  `json:"log_type"`
-	LambdaTags map[string]string `json:"lambda_tags,omitempty"`
-}
-
-type edLog struct {
-	common
-	Message string `json:"message"`
-}
-
-type edMetric struct {
-	common
-	DurationMs       float64 `json:"duration_ms"`
-	BilledDurationMs float64 `json:"billed_duration_ms"`
-	MaxMemoryUsed    float64 `json:"max_memory_used"`
-	MemorySize       float64 `json:"memory_size"`
+type invocation struct {
+	Ctx   context.Context
+	DoneC chan struct{}
 }
 
 type Pusher struct {
-	name                string
-	logClient           *http.Client
-	kinesisClient       *firehose.Firehose
-	makeRequestFunc     func(context.Context, *bytes.Buffer) error
-	endpoint            string
-	tags                map[string]string
-	cloud               *cloud
-	numPushers          int
-	bufferSize          int
-	retryInterval       time.Duration
-	pushTimeout         time.Duration
-	maxLatency          time.Duration
-	queue               chan lambda.LambdaEvent
-	stop                chan time.Duration
-	stopped             chan struct{}
-	runtimeDoneChannels []chan struct{}
+	name              string
+	logClient         *http.Client
+	inC               chan *bytes.Buffer
+	invokeC           chan *invocation
+	stopC             chan time.Duration
+	stoppedC          chan struct{}
+	kinesisClient     *firehose.Firehose
+	makeRequestFunc   func(context.Context, []*bytes.Buffer) error
+	endpoint          string
+	flushAtNextInvoke bool
+	retryInterval     time.Duration
+	pushTimeout       time.Duration
 }
 
-var faasObj = &faas{
-	Name:    os.Getenv("AWS_LAMBDA_FUNCTION_NAME"),
-	Version: os.Getenv("AWS_LAMBDA_FUNCTION_VERSION"),
-}
-
-// NewPusher initialize hostedenv pusher.
-func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent, runtimeDoneChannels []chan struct{}) *Pusher {
-	numPushers := conf.Parallelism
+// NewPusher initializes Pusher
+func NewPusher(conf *cfg.Config, inC chan *bytes.Buffer) *Pusher {
 	p := &Pusher{
-		queue:               logQueue,
-		numPushers:          numPushers,
-		tags:                conf.Tags,
-		cloud:               &cloud{ResourceID: conf.FunctionARN},
-		bufferSize:          conf.BufferSize,
-		retryInterval:       conf.RetryInterval,
-		pushTimeout:         conf.PushTimeout,
-		maxLatency:          conf.MaxLatency,
-		stop:                make(chan time.Duration, numPushers),
-		stopped:             make(chan struct{}, numPushers),
-		runtimeDoneChannels: runtimeDoneChannels,
+		inC:               inC,
+		stopC:             make(chan time.Duration),
+		stoppedC:          make(chan struct{}),
+		retryInterval:     conf.RetryInterval,
+		pushTimeout:       conf.PushTimeout,
+		flushAtNextInvoke: conf.FlushAtNextInvoke,
 	}
 	// default mode is http
 	switch conf.PusherMode {
@@ -138,178 +99,102 @@ func NewPusher(conf *cfg.Config, logQueue chan lambda.LambdaEvent, runtimeDoneCh
 	return p
 }
 
-// ConsumeParallel activates goroutines to consume logs.
-// If a shutdown or context cancel received, flush the queue and stop all operations.
 func (p *Pusher) Start() {
-	log.Printf("Starting %d pushers with buffer size: %d bytes, retryInterval: %v, pushTimeout: %v, maxLatency: %v",
-		p.numPushers, p.bufferSize, p.retryInterval, p.pushTimeout, p.maxLatency)
-	for i := 0; i < p.numPushers; i++ {
-		i := i
-		utils.Go(fmt.Sprintf("%s.run#%d", p.name, i), func() {
-			p.run(i, p.runtimeDoneChannels[i])
-		})
-	}
+	log.Printf("Starting %s", p.name)
+	utils.Go("Pusher.run", func() {
+		p.run()
+	})
 }
 
 func (p *Pusher) Stop(timeout time.Duration) {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	for i := 0; i < p.numPushers; i++ {
-		p.stop <- timeout
-	}
-	defer func() {
-		close(p.stopped)
-		close(p.stop)
-	}()
-	numStopped := 0
-	for {
-		select {
-		case <-ctx.Done():
-			log.Printf("%d pushers failed to exit gracefully", p.numPushers-numStopped)
-			return
-		case <-p.stopped:
-			numStopped++
-			if numStopped == p.numPushers {
-				log.Printf("All pushers exited gracefully")
-				return
-			}
-		}
-	}
+	p.stopC <- timeout
+	<-p.stoppedC
 }
 
-func (p *Pusher) run(id int, runtimeDone chan struct{}) {
-	// we need to wait until either lambda runtime is done or shutdown event received and flushing the queue.
-	logPrefix := fmt.Sprintf("%s-%d", p.name, id)
-	buf := new(bytes.Buffer)
-	var backoff *backoff.ExponentialBackOff
-	var timer *time.Timer
-	defer func() {
-		if timer != nil {
-			timer.Stop()
-		}
-	}()
-	retry := make(chan struct{}, 1)
-	startPushing := func(msg string) {
-		if backoff != nil {
-			return
-		}
-		log.Print(msg)
-		backoff = utils.GetExpBackoff(p.retryInterval)
-		retry <- struct{}{}
-	}
-	count := 0
-	ticker := time.NewTicker(p.maxLatency)
-	defer ticker.Stop()
-	var lastPushedTime time.Time
+func (p *Pusher) Invoke(ctx context.Context, doneC chan struct{}) {
+	p.invokeC <- &invocation{Ctx: ctx, DoneC: doneC}
+}
+
+func (p *Pusher) run() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var doneC chan struct{}
+	var payloads []*bytes.Buffer
+	flushRespC := make(chan []*bytes.Buffer)
 	for {
 		select {
-		case event := <-p.queue:
-			b, err := process(event, p.cloud, p.tags)
-			if err != nil {
-				log.Printf("%s failed to process log item %+v, err: %v", logPrefix, event, err)
-				continue
-			}
-			if b != nil {
-				count++
-				buf.Write(b)
-				buf.WriteRune('\n')
-			}
-			if buf.Len() >= p.bufferSize {
-				startPushing(fmt.Sprintf("%s has reached max buffer size", logPrefix))
-			}
-		case <-runtimeDone:
-			startPushing(fmt.Sprintf("%s received runtime done event", logPrefix))
-		case t := <-ticker.C:
-			if buf.Len() > 0 && t.Sub(lastPushedTime) >= p.maxLatency {
-				startPushing(fmt.Sprintf("%s has reached max latency", logPrefix))
-			}
-		case <-retry:
-			log.Printf("%s is pushing %d logs", logPrefix, count)
-			if err := p.push(buf, p.pushTimeout); err != nil {
-				log.Printf("%s failed to push logs, err: %v", logPrefix, err)
-				timer = time.AfterFunc(backoff.NextBackOff(), func() {
-					retry <- struct{}{}
+		case r := <-p.inC:
+			payloads = append(payloads, r)
+			if !p.flushAtNextInvoke {
+				utils.Go("Pusher.flush", func() {
+					p.flush(ctx, payloads, flushRespC)
 				})
-			} else {
-				log.Printf("%s pushed logs", logPrefix)
-				lastPushedTime = time.Now()
-				buf.Reset()
-				count = 0
-				backoff = nil
+				payloads = nil
 			}
-		case t := <-p.stop:
-			if count > 0 {
-				log.Printf("%s is pushing %d logs", logPrefix, count)
-				if err := p.push(buf, t); err != nil {
-					log.Printf("%s failed to push logs, err: %v", logPrefix, err)
+		case inv := <-p.invokeC:
+			ctx = inv.Ctx
+			doneC = inv.DoneC
+			if len(payloads) > 0 && p.flushAtNextInvoke {
+				utils.Go("Pusher.flush", func() {
+					p.flush(ctx, payloads, flushRespC)
+				})
+				payloads = nil
+			}
+		case flushResp := <-flushRespC:
+			payloads = append(flushResp, payloads...)
+			if doneC != nil {
+				doneC <- struct{}{}
+			}
+			doneC = nil
+		case timeout := <-p.stopC:
+			if len(payloads) > 0 {
+				if err := p.push(ctx, payloads, timeout); err != nil {
+					log.Printf("Failed to flush logs, err: %v", err)
+				} else {
+					log.Printf("Flush completed")
 				}
 			}
-			p.stopped <- struct{}{}
+			if doneC != nil {
+				doneC <- struct{}{}
+			}
+			log.Printf("Pusher stopped")
+			p.stoppedC <- struct{}{}
 			return
 		}
 	}
 }
 
-func (p *Pusher) push(buf *bytes.Buffer, timeout time.Duration) error {
-	if buf.Len() == 0 {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	return p.makeRequestFunc(ctx, buf)
+func (p *Pusher) push(ctx context.Context, payloads []*bytes.Buffer, timeout time.Duration) error {
+	return utils.DoWithExpBackoffC(ctx, func() error {
+		reqCtx, cancel := context.WithTimeout(ctx, p.pushTimeout)
+		defer cancel()
+		return p.makeRequestFunc(reqCtx, payloads)
+	}, p.retryInterval, timeout)
 }
 
-func process(event lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
-	eventType := event.EventType
-	timestamp := event.EventTime
-	record := event.Record
-
-	switch eventType {
-	case lambda.Function:
-		if content, ok := record.(string); ok {
-			content = strings.TrimSpace(content)
-			edLog := &edLog{
-				common: common{
-					Faas:       faasObj,
-					Cloud:      cloudObj,
-					LogType:    eventType,
-					LambdaTags: tags,
-					Timestamp:  timestamp,
-				},
-				Message: content,
-			}
-			return json.Marshal(edLog)
+func (p *Pusher) flush(ctx context.Context, payloads []*bytes.Buffer, flushRespC chan []*bytes.Buffer) {
+	log.Print("Flushing logs")
+	err := p.push(ctx, payloads, flushTimeout)
+	if err != nil {
+		log.Printf("Failed to flush logs, err: %v", err)
+		if len(payloads) > maxNumberOfPayloadsToKeep {
+			log.Printf("Dropping logs")
+			payloads = payloads[1:]
 		}
-		return nil, fmt.Errorf("failed to parse function event: %v", event)
-	case lambda.PlatformReport:
-		// metrics format is:
-		// {"durationMs":1251.76,"billedDurationMs":1252,"memorySizeMB":128,"maxMemoryUsedMB":70,"initDurationMs":270.81}
-		if content, ok := record.(map[string]interface{}); ok {
-			if metric, ok := content["metrics"].(map[string]interface{}); ok {
-				edMetric := &edMetric{
-					common: common{
-						Faas:       faasObj,
-						Cloud:      cloudObj,
-						LogType:    eventType,
-						LambdaTags: tags,
-						Timestamp:  timestamp,
-					},
-					DurationMs:       metric["durationMs"].(float64),
-					BilledDurationMs: metric["billedDurationMs"].(float64),
-					MaxMemoryUsed:    metric["maxMemoryUsedMB"].(float64),
-					MemorySize:       metric["memorySizeMB"].(float64),
-				}
-				return json.Marshal(edMetric)
-			}
-		}
-		return nil, fmt.Errorf("failed to parse platform.report event: %v", event)
-	default:
-		return nil, nil
+		flushRespC <- payloads
+		return
+	} else {
+		log.Print("Flush completed")
+		flushRespC <- nil
 	}
 }
 
-func (p *Pusher) makeHTTPRequest(ctx context.Context, buf *bytes.Buffer) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, buf)
+func (p *Pusher) makeHTTPRequest(ctx context.Context, payloads []*bytes.Buffer) error {
+	readers := make([]io.Reader, len(payloads))
+	for i := 0; i < len(payloads); i++ {
+		readers[i] = payloads[i]
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, io.MultiReader(readers...))
 	if err != nil {
 		return fmt.Errorf("failed to create http post request: %s, err: %v", p.endpoint, err)
 	}
@@ -318,7 +203,17 @@ func (p *Pusher) makeHTTPRequest(ctx context.Context, buf *bytes.Buffer) error {
 	return p.sendWithCaringResponseCode(req)
 }
 
-func (p *Pusher) makeKinesisRequest(ctx context.Context, buf *bytes.Buffer) error {
+func (p *Pusher) makeKinesisRequest(ctx context.Context, payloads []*bytes.Buffer) error {
+	len := 0
+	for _, p := range payloads {
+		len += p.Len()
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, len))
+	for _, p := range payloads {
+		if _, err := p.WriteTo(buf); err != nil {
+			return err
+		}
+	}
 	record := &firehose.Record{Data: buf.Bytes()}
 	_, err := p.kinesisClient.PutRecordWithContext(ctx, &firehose.PutRecordInput{
 		DeliveryStreamName: aws.String(p.endpoint),
