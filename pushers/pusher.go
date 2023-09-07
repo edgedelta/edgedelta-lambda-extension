@@ -165,7 +165,7 @@ func (p *Pusher) run() {
 			}
 			if len(payloads) > 0 {
 				// Blocking
-				if err := p.push(ctx, payloads, stop.Timeout); err != nil {
+				if err := p.push(context.Background(), payloads, stop.Timeout); err != nil {
 					log.Printf("Failed to flush logs, err: %v", err)
 				} else {
 					log.Printf("Flush completed")
