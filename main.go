@@ -162,6 +162,7 @@ func (w *Worker) Stop(timeout time.Duration) bool {
 		time.Sleep(timeout / 3)
 		w.producer.Shutdown(timeout / 4)
 		w.processor.Stop(time.Until(deadline))
+		w.pusher.Stop()
 		log.Printf("Extension stopped")
 		return true
 	}

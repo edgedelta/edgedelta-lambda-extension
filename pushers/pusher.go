@@ -118,6 +118,11 @@ func (p *Pusher) Invoke(ctx context.Context, doneC chan struct{}) {
 	log.Printf("Invoked pusher")
 }
 
+func (p *Pusher) Stop() {
+	<-p.stoppedC
+	log.Printf("Pusher stopped")
+}
+
 func (p *Pusher) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -127,8 +132,10 @@ func (p *Pusher) run() {
 	for {
 		select {
 		case r := <-p.inC:
-			payloads = append(payloads, r)
-			if !p.flushAtNextInvoke {
+			if r.Len() > 0 {
+				payloads = append(payloads, r)
+			}
+			if len(payloads) > 0 && !p.flushAtNextInvoke {
 				pushPayloads := payloads
 				utils.Go("Pusher.flush", func() {
 					p.flush(ctx, pushPayloads, flushRespC)
@@ -167,7 +174,6 @@ func (p *Pusher) run() {
 			if doneC != nil {
 				doneC <- struct{}{}
 			}
-			log.Printf("Pusher stopped")
 			p.stoppedC <- struct{}{}
 			return
 		}
