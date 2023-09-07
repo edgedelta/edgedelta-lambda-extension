@@ -200,9 +200,7 @@ func (p *Pusher) flush(ctx context.Context, payloads []*bytes.Buffer, flushRespC
 
 func (p *Pusher) makeHTTPRequest(ctx context.Context, payloads []*bytes.Buffer) error {
 	readers := make([]io.Reader, len(payloads))
-	log.Printf("in makehttprequest")
 	for i := 0; i < len(payloads); i++ {
-		log.Printf("payload %d length: %d", i, payloads[i].Len())
 		readers[i] = payloads[i]
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, io.MultiReader(readers...))
