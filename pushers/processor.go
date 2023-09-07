@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
@@ -51,25 +52,27 @@ type edMetric struct {
 }
 
 type Processor struct {
-	tags     map[string]string
-	cloud    *cloud
-	outC     chan *bytes.Buffer
-	inC      chan []*lambda.LambdaEvent
-	invokeC  chan string
-	stopC    chan struct{}
-	stoppedC chan struct{}
+	tags        map[string]string
+	cloud       *cloud
+	outC        chan *bytes.Buffer
+	inC         chan []*lambda.LambdaEvent
+	invokeC     chan string
+	stopC       chan time.Duration
+	pusherStopC chan *StopPayload
+	stoppedC    chan struct{}
 }
 
 // NewProcessor initializes the log processor.
-func NewProcessor(conf *cfg.Config, outC chan *bytes.Buffer, inC chan []*lambda.LambdaEvent) *Processor {
+func NewProcessor(conf *cfg.Config, outC chan *bytes.Buffer, inC chan []*lambda.LambdaEvent, pusherStopC chan *StopPayload) *Processor {
 	return &Processor{
-		outC:     outC,
-		inC:      inC,
-		invokeC:  make(chan string),
-		stopC:    make(chan struct{}),
-		stoppedC: make(chan struct{}),
-		tags:     conf.Tags,
-		cloud:    &cloud{ResourceID: conf.FunctionARN},
+		outC:        outC,
+		inC:         inC,
+		invokeC:     make(chan string),
+		pusherStopC: pusherStopC,
+		stopC:       make(chan time.Duration),
+		stoppedC:    make(chan struct{}),
+		tags:        conf.Tags,
+		cloud:       &cloud{ResourceID: conf.FunctionARN},
 	}
 }
 
@@ -80,14 +83,17 @@ func (p *Processor) Start() {
 	})
 }
 
-func (p *Processor) Stop() {
-	close(p.stopC)
+func (p *Processor) Stop(timeout time.Duration) {
+	log.Printf("Stopping processor")
+	p.stopC <- timeout
 	<-p.stoppedC
+	log.Printf("Stopped processor")
 }
 
 func (p *Processor) Invoke(e *lambda.InvokeEvent) {
+	log.Printf("Invoking processor")
 	p.invokeC <- e.RequestID
-
+	log.Printf("Invoked processor")
 }
 
 func (p *Processor) run() {
@@ -120,7 +126,7 @@ func (p *Processor) run() {
 			}
 		case r := <-p.invokeC:
 			requestID = r
-		case <-p.stopC:
+		case timeout := <-p.stopC:
 			close(p.inC)
 			// drain
 			for events := range p.inC {
@@ -136,8 +142,7 @@ func (p *Processor) run() {
 					}
 				}
 			}
-			p.outC <- buf
-			log.Printf("Processor stopped")
+			p.pusherStopC <- &StopPayload{Buffer: buf, Timeout: timeout}
 			p.stoppedC <- struct{}{}
 			return
 		}

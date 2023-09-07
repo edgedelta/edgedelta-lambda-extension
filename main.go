@@ -35,7 +35,7 @@ func buildFunctionARN(registerResp *lambda.RegisterResponse, region string) stri
 }
 
 func startExtension() (*Worker, bool) {
-	if printExtensionLogs == "true" {
+	if printExtensionLogs != "true" {
 		log.SetOutput(io.Discard)
 	}
 	log.SetPrefix("[Edge Delta] ")
@@ -117,8 +117,9 @@ type Worker struct {
 func NewWorker(config *cfg.Config, extensionID string) *Worker {
 	logC := make(chan []*lambda.LambdaEvent)
 	bufferC := make(chan *bytes.Buffer)
-	pusher := pushers.NewPusher(config, bufferC)
-	processor := pushers.NewProcessor(config, bufferC, logC)
+	pusherStopC := make(chan *pushers.StopPayload)
+	pusher := pushers.NewPusher(config, bufferC, pusherStopC)
+	processor := pushers.NewProcessor(config, bufferC, logC, pusherStopC)
 	producer := handlers.NewProducer(logC)
 
 	return &Worker{
@@ -145,8 +146,10 @@ func (w *Worker) Invoke(e *lambda.InvokeEvent) {
 	w.processor.Invoke(e)
 	select {
 	case <-ctx.Done():
+		log.Printf("Invocation context is done")
 		return
 	case <-doneC:
+		log.Printf("Pusher is done")
 		return
 	}
 }
@@ -158,8 +161,7 @@ func (w *Worker) Stop(timeout time.Duration) bool {
 		deadline := time.Now().Add(timeout)
 		time.Sleep(timeout / 3)
 		w.producer.Shutdown(timeout / 4)
-		w.processor.Stop()
-		w.pusher.Stop(time.Until(deadline))
+		w.processor.Stop(time.Until(deadline))
 		log.Printf("Extension stopped")
 		return true
 	}
@@ -194,9 +196,9 @@ func handleInvocations(ctx context.Context, worker *Worker, stop chan struct{}) 
 			invokeEvent, err := lambda.GetInvokeEvent(eventBody)
 			if err != nil {
 				log.Printf("Failed to parse Invoke event, err: %v", err)
-			} else {
-				log.Printf("Received Invoke event: %+v", invokeEvent)
+				continue
 			}
+			log.Printf("Received Invoke event: %+v", invokeEvent)
 			// Blocking call
 			worker.Invoke(invokeEvent)
 		case lambda.Shutdown:
@@ -204,10 +206,10 @@ func handleInvocations(ctx context.Context, worker *Worker, stop chan struct{}) 
 			shutdownEvent, err := lambda.GetShutdownEvent(eventBody)
 			if err != nil {
 				log.Printf("Failed to parse Shutdown event, err: %v", err)
-			} else {
-				log.Printf("Received Shutdown event: %+v", shutdownEvent)
-				timeout = time.Duration(shutdownEvent.DeadlineMs-time.Now().UnixMilli()) * time.Millisecond
+				continue
 			}
+			log.Printf("Received Shutdown event: %+v", shutdownEvent)
+			timeout = time.Duration(shutdownEvent.DeadlineMs-time.Now().UnixMilli()) * time.Millisecond
 			worker.Stop(timeout)
 			stop <- struct{}{}
 			return

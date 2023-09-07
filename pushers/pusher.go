@@ -57,12 +57,17 @@ type invocation struct {
 	DoneC chan struct{}
 }
 
+type StopPayload struct {
+	Timeout time.Duration
+	Buffer  *bytes.Buffer
+}
+
 type Pusher struct {
 	name              string
 	logClient         *http.Client
 	inC               chan *bytes.Buffer
 	invokeC           chan *invocation
-	stopC             chan time.Duration
+	pusherStopC       chan *StopPayload
 	stoppedC          chan struct{}
 	kinesisClient     *firehose.Firehose
 	makeRequestFunc   func(context.Context, []*bytes.Buffer) error
@@ -73,11 +78,12 @@ type Pusher struct {
 }
 
 // NewPusher initializes Pusher
-func NewPusher(conf *cfg.Config, inC chan *bytes.Buffer) *Pusher {
+func NewPusher(conf *cfg.Config, inC chan *bytes.Buffer, pusherStopC chan *StopPayload) *Pusher {
 	p := &Pusher{
 		inC:               inC,
-		stopC:             make(chan time.Duration),
+		pusherStopC:       pusherStopC,
 		stoppedC:          make(chan struct{}),
+		invokeC:           make(chan *invocation),
 		retryInterval:     conf.RetryInterval,
 		pushTimeout:       conf.PushTimeout,
 		flushAtNextInvoke: conf.FlushAtNextInvoke,
@@ -106,13 +112,10 @@ func (p *Pusher) Start() {
 	})
 }
 
-func (p *Pusher) Stop(timeout time.Duration) {
-	p.stopC <- timeout
-	<-p.stoppedC
-}
-
 func (p *Pusher) Invoke(ctx context.Context, doneC chan struct{}) {
+	log.Printf("Invoking pusher")
 	p.invokeC <- &invocation{Ctx: ctx, DoneC: doneC}
+	log.Printf("Invoked pusher")
 }
 
 func (p *Pusher) run() {
@@ -126,8 +129,9 @@ func (p *Pusher) run() {
 		case r := <-p.inC:
 			payloads = append(payloads, r)
 			if !p.flushAtNextInvoke {
+				pushPayloads := payloads
 				utils.Go("Pusher.flush", func() {
-					p.flush(ctx, payloads, flushRespC)
+					p.flush(ctx, pushPayloads, flushRespC)
 				})
 				payloads = nil
 			}
@@ -135,8 +139,9 @@ func (p *Pusher) run() {
 			ctx = inv.Ctx
 			doneC = inv.DoneC
 			if len(payloads) > 0 && p.flushAtNextInvoke {
+				pushPayloads := payloads
 				utils.Go("Pusher.flush", func() {
-					p.flush(ctx, payloads, flushRespC)
+					p.flush(ctx, pushPayloads, flushRespC)
 				})
 				payloads = nil
 			}
@@ -146,9 +151,14 @@ func (p *Pusher) run() {
 				doneC <- struct{}{}
 			}
 			doneC = nil
-		case timeout := <-p.stopC:
+		case stop := <-p.pusherStopC:
+			log.Printf("Stopping pusher")
+			if stop.Buffer.Len() > 0 {
+				payloads = append(payloads, stop.Buffer)
+			}
 			if len(payloads) > 0 {
-				if err := p.push(ctx, payloads, timeout); err != nil {
+				// Blocking
+				if err := p.push(ctx, payloads, stop.Timeout); err != nil {
 					log.Printf("Failed to flush logs, err: %v", err)
 				} else {
 					log.Printf("Flush completed")
@@ -183,15 +193,16 @@ func (p *Pusher) flush(ctx context.Context, payloads []*bytes.Buffer, flushRespC
 		}
 		flushRespC <- payloads
 		return
-	} else {
-		log.Print("Flush completed")
-		flushRespC <- nil
 	}
+	log.Print("Flush completed")
+	flushRespC <- nil
 }
 
 func (p *Pusher) makeHTTPRequest(ctx context.Context, payloads []*bytes.Buffer) error {
 	readers := make([]io.Reader, len(payloads))
+	log.Printf("in makehttprequest")
 	for i := 0; i < len(payloads); i++ {
+		log.Printf("payload %d length: %d", i, payloads[i].Len())
 		readers[i] = payloads[i]
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, io.MultiReader(readers...))
