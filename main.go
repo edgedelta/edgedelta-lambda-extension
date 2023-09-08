@@ -146,10 +146,10 @@ func (w *Worker) Invoke(e *lambda.InvokeEvent) {
 	w.processor.Invoke(e)
 	select {
 	case <-ctx.Done():
-		log.Printf("Invocation context is done")
+		log.Print("Invocation context is done")
 		return
 	case <-doneC:
-		log.Printf("Pusher is done")
+		log.Print("Pusher is done")
 		return
 	}
 }
@@ -163,7 +163,7 @@ func (w *Worker) Stop(timeout time.Duration) bool {
 		w.producer.Shutdown(timeout / 4)
 		w.processor.Stop(time.Until(deadline))
 		w.pusher.Stop()
-		log.Printf("Extension stopped")
+		log.Print("Extension stopped")
 		return true
 	}
 	return false

@@ -159,16 +159,17 @@ func (p *Pusher) run() {
 			}
 			doneC = nil
 		case stop := <-p.pusherStopC:
-			log.Printf("Stopping pusher")
+			log.Print("Stopping pusher")
 			if stop.Buffer.Len() > 0 {
 				payloads = append(payloads, stop.Buffer)
 			}
 			if len(payloads) > 0 {
+				log.Print("Flushing logs")
 				// Blocking
 				if err := p.push(context.Background(), payloads, stop.Timeout); err != nil {
 					log.Printf("Failed to flush logs, err: %v", err)
 				} else {
-					log.Printf("Flush completed")
+					log.Print("Flush completed")
 				}
 			}
 			if doneC != nil {

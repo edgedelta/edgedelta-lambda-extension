@@ -77,23 +77,23 @@ func NewProcessor(conf *cfg.Config, outC chan *bytes.Buffer, inC chan []*lambda.
 }
 
 func (p *Processor) Start() {
-	log.Printf("Starting Log Processor")
+	log.Print("Starting Log Processor")
 	utils.Go("LogProcessor.run", func() {
 		p.run()
 	})
 }
 
 func (p *Processor) Stop(timeout time.Duration) {
-	log.Printf("Stopping processor")
+	log.Print("Stopping processor")
 	p.stopC <- timeout
 	<-p.stoppedC
-	log.Printf("Stopped processor")
+	log.Print("Processor stopped")
 }
 
 func (p *Processor) Invoke(e *lambda.InvokeEvent) {
-	log.Printf("Invoking processor")
+	log.Print("Invoking processor")
 	p.invokeC <- e.RequestID
-	log.Printf("Invoked processor")
+	log.Print("Invoked processor")
 }
 
 func (p *Processor) run() {
@@ -118,7 +118,7 @@ func (p *Processor) run() {
 				}
 			}
 			if runtimeDone {
-				log.Printf("Runtime is done")
+				log.Print("Runtime is done")
 				p.outC <- buf
 				buf = new(bytes.Buffer)
 				requestID = ""

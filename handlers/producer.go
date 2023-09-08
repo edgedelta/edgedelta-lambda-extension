@@ -36,7 +36,7 @@ func (p *Producer) Start() {
 			log.Printf("Unexpected stop on Http Server, err: %v", err)
 			p.Shutdown(10 * time.Millisecond)
 		} else {
-			log.Printf("Http Server closed")
+			log.Print("Http Server closed")
 		}
 	}()
 }
@@ -61,7 +61,6 @@ func (p *Producer) handleLogs(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
-	log.Printf("handler received %d events", len(events))
 	p.outC <- events
 	w.WriteHeader(http.StatusOK)
 }
