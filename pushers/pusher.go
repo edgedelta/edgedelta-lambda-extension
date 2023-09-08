@@ -145,12 +145,17 @@ func (p *Pusher) run() {
 		case inv := <-p.invokeC:
 			ctx = inv.Ctx
 			doneC = inv.DoneC
-			if len(payloads) > 0 && p.flushAtNextInvoke {
-				pushPayloads := payloads
-				utils.Go("Pusher.flush", func() {
-					p.flush(ctx, pushPayloads, flushRespC)
-				})
-				payloads = nil
+			if p.flushAtNextInvoke {
+				if len(payloads) == 0 {
+					doneC <- struct{}{}
+					doneC = nil
+				} else {
+					pushPayloads := payloads
+					utils.Go("Pusher.flush", func() {
+						p.flush(ctx, pushPayloads, flushRespC)
+					})
+					payloads = nil
+				}
 			}
 		case flushResp := <-flushRespC:
 			payloads = append(flushResp, payloads...)
