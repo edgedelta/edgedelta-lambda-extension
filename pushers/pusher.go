@@ -19,10 +19,6 @@ import (
 	"github.com/aws/aws-sdk-go/service/firehose"
 )
 
-// Start dropping logs after payloads exceed maxNumberOfPayloadsToKeep
-// Logs might be dropped if endpoint cannot be reached
-
-const maxNumberOfPayloadsToKeep = 10
 const flushTimeout = 5 * time.Second
 
 var (
@@ -57,36 +53,35 @@ type invocation struct {
 	DoneC chan struct{}
 }
 
-type StopPayload struct {
-	Timeout time.Duration
-	Buffer  *bytes.Buffer
-}
-
 type Pusher struct {
 	name              string
 	logClient         *http.Client
-	inC               chan *bytes.Buffer
+	inC               chan []byte
 	invokeC           chan *invocation
-	pusherStopC       chan *StopPayload
+	runtimeDoneC      chan struct{}
+	stopC             chan time.Duration
 	stoppedC          chan struct{}
 	kinesisClient     *firehose.Firehose
-	makeRequestFunc   func(context.Context, []*bytes.Buffer) error
+	makeRequestFunc   func(context.Context, []byte) error
 	endpoint          string
 	flushAtNextInvoke bool
+	bufferSize        int
 	retryInterval     time.Duration
 	pushTimeout       time.Duration
 }
 
 // NewPusher initializes Pusher
-func NewPusher(conf *cfg.Config, inC chan *bytes.Buffer, pusherStopC chan *StopPayload) *Pusher {
+func NewPusher(conf *cfg.Config, inC chan []byte, runtimeDoneC chan struct{}) *Pusher {
 	p := &Pusher{
 		inC:               inC,
-		pusherStopC:       pusherStopC,
+		runtimeDoneC:      runtimeDoneC,
+		stopC:             make(chan time.Duration),
 		stoppedC:          make(chan struct{}),
 		invokeC:           make(chan *invocation),
+		flushAtNextInvoke: conf.FlushAtNextInvoke,
 		retryInterval:     conf.RetryInterval,
 		pushTimeout:       conf.PushTimeout,
-		flushAtNextInvoke: conf.FlushAtNextInvoke,
+		bufferSize:        conf.BufferSize,
 	}
 	// default mode is http
 	switch conf.PusherMode {
@@ -118,7 +113,9 @@ func (p *Pusher) Invoke(ctx context.Context, doneC chan struct{}) {
 	log.Printf("Invoked pusher")
 }
 
-func (p *Pusher) Stop() {
+func (p *Pusher) Stop(timeout time.Duration) {
+	log.Printf("Stopping pusher with timeout %v", timeout)
+	p.stopC <- timeout
 	<-p.stoppedC
 	log.Printf("Pusher stopped")
 }
@@ -127,51 +124,51 @@ func (p *Pusher) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var doneC chan struct{}
-	var payloads []*bytes.Buffer
-	flushRespC := make(chan []*bytes.Buffer)
+	buf := new(bytes.Buffer)
+	flushRespC := make(chan []byte)
 	for {
 		select {
-		case r := <-p.inC:
-			if r.Len() > 0 {
-				payloads = append(payloads, r)
-			}
-			if len(payloads) > 0 && !p.flushAtNextInvoke {
-				pushPayloads := payloads
+		case b := <-p.inC:
+			buf.Write(b)
+		case <-p.runtimeDoneC:
+			if !p.flushAtNextInvoke {
+				payload := buf.Bytes()
 				utils.Go("Pusher.flush", func() {
-					p.flush(ctx, pushPayloads, flushRespC)
+					p.flush(ctx, payload, flushRespC)
 				})
-				payloads = nil
+				buf = new(bytes.Buffer)
 			}
 		case inv := <-p.invokeC:
 			ctx = inv.Ctx
 			doneC = inv.DoneC
 			if p.flushAtNextInvoke {
-				if len(payloads) == 0 {
+				if buf.Len() == 0 {
 					doneC <- struct{}{}
 					doneC = nil
 				} else {
-					pushPayloads := payloads
+					payload := buf.Bytes()
 					utils.Go("Pusher.flush", func() {
-						p.flush(ctx, pushPayloads, flushRespC)
+						p.flush(ctx, payload, flushRespC)
 					})
-					payloads = nil
+					buf = new(bytes.Buffer)
 				}
 			}
-		case flushResp := <-flushRespC:
-			payloads = append(flushResp, payloads...)
+		case failedPayload := <-flushRespC:
+			if len(failedPayload) > 0 {
+				newBuf := new(bytes.Buffer)
+				newBuf.Write(failedPayload)
+				newBuf.Write(buf.Bytes())
+				buf = newBuf
+			}
 			if doneC != nil {
 				doneC <- struct{}{}
 			}
 			doneC = nil
-		case stop := <-p.pusherStopC:
-			log.Print("Stopping pusher")
-			if stop.Buffer.Len() > 0 {
-				payloads = append(payloads, stop.Buffer)
-			}
-			if len(payloads) > 0 {
+		case timeout := <-p.stopC:
+			if buf.Len() > 0 {
 				log.Print("Flushing logs")
 				// Blocking
-				if err := p.push(context.Background(), payloads, stop.Timeout); err != nil {
+				if err := p.push(context.Background(), buf.Bytes(), timeout); err != nil {
 					log.Printf("Failed to flush logs, err: %v", err)
 				} else {
 					log.Print("Flush completed")
@@ -186,36 +183,32 @@ func (p *Pusher) run() {
 	}
 }
 
-func (p *Pusher) push(ctx context.Context, payloads []*bytes.Buffer, timeout time.Duration) error {
+func (p *Pusher) push(ctx context.Context, payload []byte, timeout time.Duration) error {
 	return utils.DoWithExpBackoffC(ctx, func() error {
 		reqCtx, cancel := context.WithTimeout(ctx, p.pushTimeout)
 		defer cancel()
-		return p.makeRequestFunc(reqCtx, payloads)
+		return p.makeRequestFunc(reqCtx, payload)
 	}, p.retryInterval, timeout)
 }
 
-func (p *Pusher) flush(ctx context.Context, payloads []*bytes.Buffer, flushRespC chan []*bytes.Buffer) {
+func (p *Pusher) flush(ctx context.Context, payload []byte, flushRespC chan []byte) {
 	log.Print("Flushing logs")
-	err := p.push(ctx, payloads, flushTimeout)
+	err := p.push(ctx, payload, flushTimeout)
 	if err != nil {
 		log.Printf("Failed to flush logs, err: %v", err)
-		if len(payloads) > maxNumberOfPayloadsToKeep {
+		if len(payload) > p.bufferSize {
 			log.Printf("Dropping logs")
-			payloads = payloads[1:]
+			payload = payload[p.bufferSize/10:] // Drop 1/10 of logs
 		}
-		flushRespC <- payloads
+		flushRespC <- payload
 		return
 	}
 	log.Print("Flush completed")
 	flushRespC <- nil
 }
 
-func (p *Pusher) makeHTTPRequest(ctx context.Context, payloads []*bytes.Buffer) error {
-	readers := make([]io.Reader, len(payloads))
-	for i := 0; i < len(payloads); i++ {
-		readers[i] = payloads[i]
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, io.MultiReader(readers...))
+func (p *Pusher) makeHTTPRequest(ctx context.Context, payload []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("failed to create http post request: %s, err: %v", p.endpoint, err)
 	}
@@ -224,18 +217,8 @@ func (p *Pusher) makeHTTPRequest(ctx context.Context, payloads []*bytes.Buffer) 
 	return p.sendWithCaringResponseCode(req)
 }
 
-func (p *Pusher) makeKinesisRequest(ctx context.Context, payloads []*bytes.Buffer) error {
-	len := 0
-	for _, p := range payloads {
-		len += p.Len()
-	}
-	buf := bytes.NewBuffer(make([]byte, 0, len))
-	for _, p := range payloads {
-		if _, err := p.WriteTo(buf); err != nil {
-			return err
-		}
-	}
-	record := &firehose.Record{Data: buf.Bytes()}
+func (p *Pusher) makeKinesisRequest(ctx context.Context, payload []byte) error {
+	record := &firehose.Record{Data: payload}
 	_, err := p.kinesisClient.PutRecordWithContext(ctx, &firehose.PutRecordInput{
 		DeliveryStreamName: aws.String(p.endpoint),
 		Record:             record,

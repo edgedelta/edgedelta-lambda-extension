@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -116,10 +115,10 @@ type Worker struct {
 
 func NewWorker(config *cfg.Config, extensionID string) *Worker {
 	logC := make(chan []*lambda.LambdaEvent)
-	bufferC := make(chan *bytes.Buffer)
-	pusherStopC := make(chan *pushers.StopPayload)
-	pusher := pushers.NewPusher(config, bufferC, pusherStopC)
-	processor := pushers.NewProcessor(config, bufferC, logC, pusherStopC)
+	bufferC := make(chan []byte)
+	runtimeDoneC := make(chan struct{})
+	pusher := pushers.NewPusher(config, bufferC, runtimeDoneC)
+	processor := pushers.NewProcessor(config, bufferC, logC, runtimeDoneC)
 	producer := handlers.NewProducer(logC)
 
 	return &Worker{
@@ -161,8 +160,8 @@ func (w *Worker) Stop(timeout time.Duration) bool {
 		deadline := time.Now().Add(timeout)
 		time.Sleep(timeout / 3)
 		w.producer.Shutdown(timeout / 4)
-		w.processor.Stop(time.Until(deadline))
-		w.pusher.Stop()
+		w.processor.Stop()
+		w.pusher.Stop(time.Until(deadline))
 		log.Print("Extension stopped")
 		return true
 	}

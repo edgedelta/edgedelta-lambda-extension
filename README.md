@@ -40,6 +40,7 @@ Supported ENV_VARIABLES for Lambda Function are:
 - ED_LAMBDA_LOG_TYPES: Which types of logs you want to get from Lambda Function. Options are function,platform,extension. Default is function,platform.
 - ED_PUSH_TIMEOUT_MS: Push timeout is the total duration of waiting for to send one batch of logs (in milliseconds). Default is 1000.
 - ED_RETRY_INTERVAL_MS: RetryInterval is the initial interval to wait until next retry (in milliseconds). It is increased exponentially until our process is shut down. Default is 100.
+- ED_BUFFER_SIZE_MB: Maximum buffer size to keep logs (in MB). Default is 20. If stored logs exceed this limit, some logs may be dropped! 
 - ED_FLUSH_AT_NEXT_INVOKE: If set to 'true', logs are flushed at the start of next invocation of the function. Normally logs are flushed after function execution finishes which can add to total running time. For lambda functions that are executed periodically, flush at next invoke can be turned on to reduce cost.
 - ED_PRINT_EXTENSION_LOGS: If set to 'true', extension's own logs are printed in CloudWatch.
   

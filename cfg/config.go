@@ -37,6 +37,7 @@ type Config struct {
 	Tags              map[string]string
 	Region            string
 	FunctionARN       string
+	BufferSize        int
 	FlushAtNextInvoke bool
 }
 
@@ -64,6 +65,17 @@ func GetConfigAndValidate() (*Config, error) {
 
 	config.ForwardTags = os.Getenv("ED_FORWARD_LAMBDA_TAGS") == "true"
 	config.FlushAtNextInvoke = os.Getenv("ED_FLUSH_AT_NEXT_INVOKE") == "true"
+
+	bufferSize := os.Getenv("ED_BUFFER_SIZE_MB")
+	if bufferSize != "" {
+		if i, err := strconv.ParseInt(bufferSize, 10, 0); err == nil {
+			config.BufferSize = int(i)
+		} else {
+			multiErr = append(multiErr, fmt.Sprintf("Unable to parse BUFFER_SIZE_MB: %v", err))
+		}
+	} else {
+		config.BufferSize = 20 * 1000 * 1000
+	}
 
 	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT_MS")
 	if pushTimeout != "" {

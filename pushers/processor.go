@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
@@ -52,27 +51,27 @@ type edMetric struct {
 }
 
 type Processor struct {
-	tags        map[string]string
-	cloud       *cloud
-	outC        chan *bytes.Buffer
-	inC         chan []*lambda.LambdaEvent
-	invokeC     chan string
-	stopC       chan time.Duration
-	pusherStopC chan *StopPayload
-	stoppedC    chan struct{}
+	tags         map[string]string
+	cloud        *cloud
+	outC         chan []byte
+	inC          chan []*lambda.LambdaEvent
+	invokeC      chan string
+	runtimeDoneC chan struct{}
+	stopC        chan struct{}
+	stoppedC     chan struct{}
 }
 
 // NewProcessor initializes the log processor.
-func NewProcessor(conf *cfg.Config, outC chan *bytes.Buffer, inC chan []*lambda.LambdaEvent, pusherStopC chan *StopPayload) *Processor {
+func NewProcessor(conf *cfg.Config, outC chan []byte, inC chan []*lambda.LambdaEvent, runtimeDoneC chan struct{}) *Processor {
 	return &Processor{
-		outC:        outC,
-		inC:         inC,
-		invokeC:     make(chan string),
-		pusherStopC: pusherStopC,
-		stopC:       make(chan time.Duration),
-		stoppedC:    make(chan struct{}),
-		tags:        conf.Tags,
-		cloud:       &cloud{ResourceID: conf.FunctionARN},
+		outC:         outC,
+		inC:          inC,
+		invokeC:      make(chan string),
+		runtimeDoneC: runtimeDoneC,
+		stopC:        make(chan struct{}),
+		stoppedC:     make(chan struct{}),
+		tags:         conf.Tags,
+		cloud:        &cloud{ResourceID: conf.FunctionARN},
 	}
 }
 
@@ -83,9 +82,9 @@ func (p *Processor) Start() {
 	})
 }
 
-func (p *Processor) Stop(timeout time.Duration) {
+func (p *Processor) Stop() {
 	log.Print("Stopping processor")
-	p.stopC <- timeout
+	p.stopC <- struct{}{}
 	<-p.stoppedC
 	log.Print("Processor stopped")
 }
@@ -99,10 +98,10 @@ func (p *Processor) Invoke(e *lambda.InvokeEvent) {
 func (p *Processor) run() {
 	requestID := ""
 	runtimeDone := false
-	buf := new(bytes.Buffer)
 	for {
 		select {
 		case events := <-p.inC:
+			buf := new(bytes.Buffer)
 			for _, e := range events {
 				if e.EventType != lambda.Function {
 					runtimeDone = handlePlatformEvent(e, requestID)
@@ -117,18 +116,19 @@ func (p *Processor) run() {
 					buf.WriteRune(sep)
 				}
 			}
+			p.outC <- buf.Bytes()
 			if runtimeDone {
 				log.Print("Runtime is done")
-				p.outC <- buf
-				buf = new(bytes.Buffer)
+				p.runtimeDoneC <- struct{}{}
 				requestID = ""
 				runtimeDone = false
 			}
 		case r := <-p.invokeC:
 			requestID = r
-		case timeout := <-p.stopC:
+		case <-p.stopC:
 			close(p.inC)
 			// drain
+			buf := new(bytes.Buffer)
 			for events := range p.inC {
 				for _, e := range events {
 					b, err := process(e, p.cloud, p.tags)
@@ -142,7 +142,7 @@ func (p *Processor) run() {
 					}
 				}
 			}
-			p.pusherStopC <- &StopPayload{Buffer: buf, Timeout: timeout}
+			p.outC <- buf.Bytes()
 			p.stoppedC <- struct{}{}
 			return
 		}
