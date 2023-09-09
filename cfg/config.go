@@ -26,20 +26,19 @@ var (
 
 // Config for storing all parameters
 type Config struct {
-	EDEndpoint      string
-	KinesisEndpoint string
-	PusherMode      string
-	ForwardTags     bool
-	LogTypes        []string
-	BfgConfig       *lambda.BufferingCfg
-	BufferSize      int
-	Parallelism     int
-	MaxLatency      time.Duration
-	PushTimeout     time.Duration
-	RetryInterval   time.Duration
-	Tags            map[string]string
-	Region          string
-	FunctionARN     string
+	EDEndpoint        string
+	KinesisEndpoint   string
+	PusherMode        string
+	ForwardTags       bool
+	LogTypes          []string
+	BfgConfig         *lambda.BufferingCfg
+	PushTimeout       time.Duration
+	RetryInterval     time.Duration
+	Tags              map[string]string
+	Region            string
+	FunctionARN       string
+	BufferSize        int
+	FlushAtNextInvoke bool
 }
 
 func GetConfigAndValidate() (*Config, error) {
@@ -61,22 +60,21 @@ func GetConfigAndValidate() (*Config, error) {
 	if config.KinesisEndpoint == "" && config.PusherMode == KINESIS_PUSHER {
 		return nil, errors.New("KINESIS_ENDPOINT must be set as environment variable when PUSHER_MODE is set to kinesis")
 	}
+
 	config.Region = os.Getenv("AWS_REGION")
-	parallelism := os.Getenv("ED_PARALLELISM")
-	if parallelism != "" {
-		if i, err := strconv.ParseInt(parallelism, 10, 0); err == nil {
-			config.Parallelism = int(i)
+
+	config.ForwardTags = os.Getenv("ED_FORWARD_LAMBDA_TAGS") == "true"
+	config.FlushAtNextInvoke = os.Getenv("ED_FLUSH_AT_NEXT_INVOKE") == "true"
+
+	bufferSize := os.Getenv("ED_BUFFER_SIZE_MB")
+	if bufferSize != "" {
+		if i, err := strconv.ParseInt(bufferSize, 10, 0); err == nil {
+			config.BufferSize = int(i)
 		} else {
-			multiErr = append(multiErr, fmt.Sprintf("Unable to parse PARALLELISM: %v", err))
+			multiErr = append(multiErr, fmt.Sprintf("Unable to parse BUFFER_SIZE_MB: %v", err))
 		}
 	} else {
-		config.Parallelism = 4
-	}
-
-	config.ForwardTags = false
-	forwardTags := os.Getenv("ED_FORWARD_LAMBDA_TAGS")
-	if forwardTags != "" {
-		config.ForwardTags = true
+		config.BufferSize = 20 * 1000 * 1000
 	}
 
 	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT_MS")
@@ -87,7 +85,7 @@ func GetConfigAndValidate() (*Config, error) {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse PUSH_TIMEOUT_MS: %v", err))
 		}
 	} else {
-		config.PushTimeout = 500 * time.Millisecond
+		config.PushTimeout = 1 * time.Second
 	}
 
 	retryInterval := os.Getenv("ED_RETRY_INTERVAL_MS")
@@ -99,17 +97,6 @@ func GetConfigAndValidate() (*Config, error) {
 		}
 	} else {
 		config.RetryInterval = 100 * time.Millisecond
-	}
-
-	maxLatency := os.Getenv("ED_LOGS_LATENCY_SEC")
-	if maxLatency != "" {
-		if i, err := strconv.ParseInt(maxLatency, 10, 0); err == nil {
-			config.MaxLatency = time.Duration(i) * time.Second
-		} else {
-			multiErr = append(multiErr, fmt.Sprintf("Unable to parse LOGS_LATENCY_SEC: %v", err))
-		}
-	} else {
-		config.MaxLatency = 10 * time.Second
 	}
 
 	config.BfgConfig = &lambda.BufferingCfg{
@@ -135,8 +122,6 @@ func GetConfigAndValidate() (*Config, error) {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse MAX_BYTES: %v", err))
 		}
 	}
-	// https://docs.aws.amazon.com/lambda/latest/dg/telemetry-api.html
-	config.BufferSize = int(2*config.BfgConfig.MaxBytes+300*config.BfgConfig.MaxItems) / config.Parallelism
 
 	timeoutMs := os.Getenv("ED_LAMBDA_TIMEOUT_MS")
 	if timeoutMs != "" {
