@@ -69,7 +69,7 @@ func GetConfigAndValidate() (*Config, error) {
 	bufferSize := os.Getenv("ED_BUFFER_SIZE_MB")
 	if bufferSize != "" {
 		if i, err := strconv.ParseInt(bufferSize, 10, 0); err == nil {
-			config.BufferSize = int(i)
+			config.BufferSize = int(i) * 1000 * 1000
 		} else {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse BUFFER_SIZE_MB: %v", err))
 		}
@@ -77,15 +77,15 @@ func GetConfigAndValidate() (*Config, error) {
 		config.BufferSize = 20 * 1000 * 1000
 	}
 
-	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT_MS")
+	pushTimeout := os.Getenv("ED_PUSH_TIMEOUT_SEC")
 	if pushTimeout != "" {
 		if i, err := strconv.ParseInt(pushTimeout, 10, 0); err == nil {
-			config.PushTimeout = time.Duration(i) * time.Millisecond
+			config.PushTimeout = time.Duration(i) * time.Second
 		} else {
 			multiErr = append(multiErr, fmt.Sprintf("Unable to parse PUSH_TIMEOUT_MS: %v", err))
 		}
 	} else {
-		config.PushTimeout = 1 * time.Second
+		config.PushTimeout = 5 * time.Second
 	}
 
 	retryInterval := os.Getenv("ED_RETRY_INTERVAL_MS")
