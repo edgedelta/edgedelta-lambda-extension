@@ -198,7 +198,14 @@ func (p *Pusher) flush(ctx context.Context, payload []byte, flushRespC chan []by
 		log.Printf("Failed to flush logs, err: %v", err)
 		if len(payload) > p.bufferSize {
 			log.Printf("Dropping logs")
-			payload = payload[p.bufferSize/10:] // Drop 1/10 of logs
+			start := p.bufferSize / 10
+			for i := start; i < len(payload); i++ {
+				if payload[i] == sep {
+					start = i + 1
+					break
+				}
+			}
+			payload = payload[start:] // Drop 1/10 of logs
 		}
 		flushRespC <- payload
 		return
