@@ -41,6 +41,8 @@ jobs:
         default: "amd64"
     steps:
       - checkout
+      - attach_workspace:
+          at: /tmp/workspace
       - run:
           name: Build lambda extension
           command: |
@@ -81,6 +83,7 @@ workflows:
               ignore: /.*/
             tags:
               only: /^v\d+\.\d+\.\d+$/
+          context: serverless-publish
       - build_and_publish:
           <<: *lambda_extension_release_filter
           matrix:
