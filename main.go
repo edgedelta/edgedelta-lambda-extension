@@ -16,6 +16,7 @@ import (
 	"github.com/edgedelta/edgedelta-lambda-extension/handlers"
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
 	"github.com/edgedelta/edgedelta-lambda-extension/pushers"
+	"github.com/edgedelta/edgedelta-lambda-extension/utils"
 )
 
 const invocationTimeoutGracePeriod = 50 * time.Millisecond
@@ -60,6 +61,7 @@ func startExtension() (*Worker, bool) {
 		})
 		return nil, false
 	}
+	config.AccountID = registerResp.AccountID
 	region := config.Region
 	functionARN := buildFunctionARN(registerResp, region)
 	config.FunctionARN = functionARN
@@ -88,6 +90,18 @@ func startExtension() (*Worker, bool) {
 		}
 		log.Printf("Found lambda tags: %v", tags)
 		config.Tags = tags
+
+		functionConfig, err := awsClient.GetFunctionConfiguration(functionARN)
+		if err != nil {
+			log.Printf("Failed to get Lambda Function Configuration, err: %v", err)
+			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
+				Type:    "GetFunctionConfigurationError",
+				Message: err.Error(),
+			})
+			return nil, false
+		}
+		config.Tags[lambda.ProcessRuntimeNameTag] = *functionConfig.Runtime
+		config.Tags[lambda.RuntimeArchitectureTag] = utils.GetRuntimeArchitecture()
 	}
 	worker := NewWorker(config, extensionID)
 	worker.Start()

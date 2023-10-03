@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/edgedelta/edgedelta-lambda-extension/cfg"
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
@@ -16,8 +17,9 @@ import (
 const sep = '\n'
 
 type faas struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 var faasObj = &faas{
@@ -27,6 +29,8 @@ var faasObj = &faas{
 
 type cloud struct {
 	ResourceID string `json:"resource_id"`
+	AccountID  string `json:"account_id"`
+	Region     string `json:"region"`
 }
 
 type common struct {
@@ -44,34 +48,46 @@ type edLog struct {
 
 type edMetric struct {
 	common
-	DurationMs       float64 `json:"duration_ms"`
-	BilledDurationMs float64 `json:"billed_duration_ms"`
-	MaxMemoryUsed    float64 `json:"max_memory_used"`
-	MemorySize       float64 `json:"memory_size"`
+	BilledDurationMs      float64  `json:"billed_duration_ms"`
+	InitDurationMs        float64  `json:"init_duration_ms"`
+	RuntimeDurationMs     *float64 `json:"runtime_duration_ms,omitempty"`
+	DurationMs            float64  `json:"duration_ms"`
+	PostRuntimeDurationMs float64  `json:"post_runtime_duration_ms"`
+	MaxMemoryUsed         float64  `json:"max_memory_used"`
+	MemorySize            float64  `json:"memory_size"`
+	MemoryLeft            *float64 `json:"memory_left,omitempty"`
+	MemoryPercent         *float64 `json:"memory_percent,omitempty"`
+}
+
+type requestDurations struct {
+	Start time.Time
+	End   time.Time
 }
 
 type Processor struct {
-	tags         map[string]string
-	cloud        *cloud
-	outC         chan []byte
-	inC          chan []*lambda.LambdaEvent
-	invokeC      chan string
-	runtimeDoneC chan struct{}
-	stopC        chan struct{}
-	stoppedC     chan struct{}
+	tags             map[string]string
+	cloud            *cloud
+	outC             chan []byte
+	inC              chan []*lambda.LambdaEvent
+	invokeC          chan string
+	runtimeDoneC     chan struct{}
+	stopC            chan struct{}
+	stoppedC         chan struct{}
+	requestDurations *requestDurations
 }
 
 // NewProcessor initializes the log processor.
 func NewProcessor(conf *cfg.Config, outC chan []byte, inC chan []*lambda.LambdaEvent, runtimeDoneC chan struct{}) *Processor {
 	return &Processor{
-		outC:         outC,
-		inC:          inC,
-		invokeC:      make(chan string),
-		runtimeDoneC: runtimeDoneC,
-		stopC:        make(chan struct{}),
-		stoppedC:     make(chan struct{}),
-		tags:         conf.Tags,
-		cloud:        &cloud{ResourceID: conf.FunctionARN},
+		outC:             outC,
+		inC:              inC,
+		invokeC:          make(chan string),
+		runtimeDoneC:     runtimeDoneC,
+		stopC:            make(chan struct{}),
+		stoppedC:         make(chan struct{}),
+		tags:             conf.Tags,
+		cloud:            &cloud{ResourceID: conf.FunctionARN, AccountID: conf.AccountID, Region: conf.Region},
+		requestDurations: &requestDurations{},
 	}
 }
 
@@ -98,6 +114,7 @@ func (p *Processor) Invoke(e *lambda.InvokeEvent) {
 func (p *Processor) run() {
 	requestID := ""
 	runtimeDone := false
+	faasObj.RequestID = requestID
 	for {
 		select {
 		case events := <-p.inC:
@@ -106,7 +123,7 @@ func (p *Processor) run() {
 				if e.EventType != lambda.Function {
 					runtimeDone = handlePlatformEvent(e, requestID)
 				}
-				b, err := process(e, p.cloud, p.tags)
+				b, err := process(e, p.cloud, p.tags, p.requestDurations)
 				if err != nil {
 					log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
 					continue
@@ -121,17 +138,19 @@ func (p *Processor) run() {
 				log.Print("Runtime is done")
 				p.runtimeDoneC <- struct{}{}
 				requestID = ""
+				faasObj.RequestID = requestID
 				runtimeDone = false
 			}
 		case r := <-p.invokeC:
 			requestID = r
+			faasObj.RequestID = requestID
 		case <-p.stopC:
 			close(p.inC)
 			// drain
 			buf := new(bytes.Buffer)
 			for events := range p.inC {
 				for _, e := range events {
-					b, err := process(e, p.cloud, p.tags)
+					b, err := process(e, p.cloud, p.tags, p.requestDurations)
 					if err != nil {
 						log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
 						continue
@@ -164,12 +183,34 @@ func handlePlatformEvent(e *lambda.LambdaEvent, requestID string) bool {
 	return false
 }
 
-func process(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
+func process(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string, requestDurations *requestDurations) ([]byte, error) {
 	eventType := e.EventType
 	timestamp := e.EventTime
 	record := e.Record
 
 	switch eventType {
+	case lambda.PlatformStart:
+		var err error
+		requestDurations.Start, err = time.Parse(time.RFC3339Nano, timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse platform.start event: %v", e)
+		}
+		if _, ok := record.(map[string]interface{}); !ok {
+			return nil, fmt.Errorf("failed to parse platform.start event: %v", e)
+		}
+		tags[lambda.StepTag] = lambda.StartStep
+		edLog := &edLog{
+			common: common{
+				Faas:       faasObj,
+				Cloud:      cloudObj,
+				LogType:    eventType,
+				LambdaTags: tags,
+				Timestamp:  timestamp,
+			},
+			Message: fmt.Sprintf("START RequestID: %s", faasObj.RequestID),
+		}
+		delete(tags, lambda.StepTag)
+		return json.Marshal(edLog)
 	case lambda.Function:
 		if content, ok := record.(string); ok {
 			content = strings.TrimSpace(content)
@@ -191,6 +232,37 @@ func process(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]
 		// {"durationMs":1251.76,"billedDurationMs":1252,"memorySizeMB":128,"maxMemoryUsedMB":70,"initDurationMs":270.81}
 		if content, ok := record.(map[string]interface{}); ok {
 			if metric, ok := content["metrics"].(map[string]interface{}); ok {
+				maxMemoryUsed, maxOk := metric["maxMemoryUsedMB"].(float64)
+				memorySize, sizeOk := metric["memorySizeMB"].(float64)
+				var memoryLeft *float64
+				var memoryPercent *float64
+				if maxOk && sizeOk {
+					mLeft := memorySize - maxMemoryUsed
+					mPercent := mLeft / memorySize * 100
+					memoryLeft = &mLeft
+					memoryPercent = &mPercent
+				}
+				duration, durationOk := metric["durationMs"].(float64)
+				if !durationOk {
+					return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
+				}
+				billedDuration, billedOk := metric["billedDurationMs"].(float64)
+				if !billedOk {
+					return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
+				}
+				var runtimeDuration *float64
+				if durationOk && billedOk {
+					rd := duration - billedDuration
+					runtimeDuration = &rd
+				}
+
+				var err error
+				requestDurations.End, err = time.Parse(time.RFC3339Nano, timestamp)
+				if err != nil {
+					return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
+				}
+
+				postRuntimeDuration := duration - float64(requestDurations.End.Sub(requestDurations.Start).Milliseconds())
 				edMetric := &edMetric{
 					common: common{
 						Faas:       faasObj,
@@ -199,15 +271,38 @@ func process(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]
 						LambdaTags: tags,
 						Timestamp:  timestamp,
 					},
-					DurationMs:       metric["durationMs"].(float64),
-					BilledDurationMs: metric["billedDurationMs"].(float64),
-					MaxMemoryUsed:    metric["maxMemoryUsedMB"].(float64),
-					MemorySize:       metric["memorySizeMB"].(float64),
+					DurationMs:            duration,
+					BilledDurationMs:      billedDuration,
+					InitDurationMs:        metric["initDurationMs"].(float64),
+					RuntimeDurationMs:     runtimeDuration,
+					PostRuntimeDurationMs: postRuntimeDuration,
+					MaxMemoryUsed:         maxMemoryUsed,
+					MemorySize:            memorySize,
+					MemoryLeft:            memoryLeft,
+					MemoryPercent:         memoryPercent,
 				}
 				return json.Marshal(edMetric)
 			}
 		}
 		return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
+
+	case lambda.PlatformRuntimeDone:
+		if _, ok := record.(map[string]interface{}); !ok {
+			return nil, fmt.Errorf("failed to parse platform.runtimeDone event: %v", e)
+		}
+		tags[lambda.StepTag] = lambda.EndStep
+		edLog := &edLog{
+			common: common{
+				Faas:       faasObj,
+				Cloud:      cloudObj,
+				LogType:    eventType,
+				LambdaTags: tags,
+				Timestamp:  timestamp,
+			},
+			Message: fmt.Sprintf("END RequestID: %s", faasObj.RequestID),
+		}
+		delete(tags, lambda.StepTag)
+		return json.Marshal(edLog)
 	default:
 		return nil, nil
 	}

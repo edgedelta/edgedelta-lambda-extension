@@ -30,3 +30,14 @@ func (c *DefaultClient) GetTags(functionARN string) (*lambda.ListTagsOutput, err
 
 	return result, nil
 }
+
+func (c *DefaultClient) GetFunctionConfiguration(functionARN string) (*lambda.FunctionConfiguration, error) {
+	result, err := c.svc.GetFunctionConfiguration(&lambda.GetFunctionConfigurationInput{
+		FunctionName: aws.String(functionARN),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}

@@ -35,6 +35,7 @@ type Config struct {
 	PushTimeout       time.Duration
 	RetryInterval     time.Duration
 	Tags              map[string]string
+	AccountID         string
 	Region            string
 	FunctionARN       string
 	BufferSize        int

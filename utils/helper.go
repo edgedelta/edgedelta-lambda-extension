@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"bytes"
 	"context"
 	"log"
 	"runtime/debug"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -86,4 +88,24 @@ func (p *Pool) enter() {
 func (p *Pool) exit() {
 	atomic.AddInt32(&p.inProgress, -1)
 	<-p.activeWorkers // exit the active area
+}
+
+const (
+	X86Architecture = "x86_64"
+	ArmArchitecture = "arm64"
+	AmdArchitecture = "amd64"
+)
+
+func GetRuntimeArchitecture() string {
+	var uname unix.Utsname
+	if err := unix.Uname(&uname); err != nil {
+		return AmdArchitecture
+	}
+
+	switch string(uname.Machine[:bytes.IndexByte(uname.Machine[:], 0)]) {
+	case "aarch64":
+		return ArmArchitecture
+	default:
+		return X86Architecture
+	}
 }
