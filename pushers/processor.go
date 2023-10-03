@@ -73,7 +73,7 @@ type Processor struct {
 	runtimeDoneC     chan struct{}
 	stopC            chan struct{}
 	stoppedC         chan struct{}
-	requestDurations *requestDurations
+	requestDuration *requestDuration
 }
 
 // NewProcessor initializes the log processor.
