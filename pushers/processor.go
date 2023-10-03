@@ -59,35 +59,35 @@ type edMetric struct {
 	MemoryPercent         *float64 `json:"memory_percent,omitempty"`
 }
 
-type requestDurations struct {
+type requestDuration struct {
 	Start time.Time
 	End   time.Time
 }
 
 type Processor struct {
-	tags             map[string]string
-	cloud            *cloud
-	outC             chan []byte
-	inC              chan []*lambda.LambdaEvent
-	invokeC          chan string
-	runtimeDoneC     chan struct{}
-	stopC            chan struct{}
-	stoppedC         chan struct{}
+	tags            map[string]string
+	cloud           *cloud
+	outC            chan []byte
+	inC             chan []*lambda.LambdaEvent
+	invokeC         chan string
+	runtimeDoneC    chan struct{}
+	stopC           chan struct{}
+	stoppedC        chan struct{}
 	requestDuration *requestDuration
 }
 
 // NewProcessor initializes the log processor.
 func NewProcessor(conf *cfg.Config, outC chan []byte, inC chan []*lambda.LambdaEvent, runtimeDoneC chan struct{}) *Processor {
 	return &Processor{
-		outC:             outC,
-		inC:              inC,
-		invokeC:          make(chan string),
-		runtimeDoneC:     runtimeDoneC,
-		stopC:            make(chan struct{}),
-		stoppedC:         make(chan struct{}),
-		tags:             conf.Tags,
-		cloud:            &cloud{ResourceID: conf.FunctionARN, AccountID: conf.AccountID, Region: conf.Region},
-		requestDurations: &requestDurations{},
+		outC:            outC,
+		inC:             inC,
+		invokeC:         make(chan string),
+		runtimeDoneC:    runtimeDoneC,
+		stopC:           make(chan struct{}),
+		stoppedC:        make(chan struct{}),
+		tags:            conf.Tags,
+		cloud:           &cloud{ResourceID: conf.FunctionARN, AccountID: conf.AccountID, Region: conf.Region},
+		requestDuration: &requestDuration{},
 	}
 }
 
@@ -123,7 +123,7 @@ func (p *Processor) run() {
 				if e.EventType != lambda.Function {
 					runtimeDone = handlePlatformEvent(e, requestID)
 				}
-				b, err := process(e, p.cloud, p.tags, p.requestDurations)
+				b, err := process(e, p.cloud, p.tags, p.requestDuration)
 				if err != nil {
 					log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
 					continue
@@ -150,7 +150,7 @@ func (p *Processor) run() {
 			buf := new(bytes.Buffer)
 			for events := range p.inC {
 				for _, e := range events {
-					b, err := process(e, p.cloud, p.tags, p.requestDurations)
+					b, err := process(e, p.cloud, p.tags, p.requestDuration)
 					if err != nil {
 						log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
 						continue
@@ -183,7 +183,7 @@ func handlePlatformEvent(e *lambda.LambdaEvent, requestID string) bool {
 	return false
 }
 
-func process(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string, requestDurations *requestDurations) ([]byte, error) {
+func process(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string, requestDurations *requestDuration) ([]byte, error) {
 	eventType := e.EventType
 	timestamp := e.EventTime
 	record := e.Record
