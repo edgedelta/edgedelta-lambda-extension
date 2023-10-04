@@ -100,6 +100,14 @@ func startExtension() (*Worker, bool) {
 			})
 			return nil, false
 		}
+		if functionConfig == nil {
+			log.Printf("Failed to get Lambda Function Configuration, err: %v", err)
+			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
+				Type:    "GetFunctionConfigurationError",
+				Message: fmt.Sprintf("Function configuration is not found for arn: %s", functionARN),
+			})
+			return nil, false
+		}
 		config.Tags[lambda.ProcessRuntimeNameTag] = *functionConfig.Runtime
 		config.Tags[lambda.RuntimeArchitectureTag] = utils.GetRuntimeArchitecture()
 	}

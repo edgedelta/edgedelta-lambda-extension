@@ -109,3 +109,14 @@ func GetRuntimeArchitecture() string {
 		return X86Architecture
 	}
 }
+
+func CopyMap(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	copied := make(map[string]string, len(m))
+	for k, v := range m {
+		copied[k] = v
+	}
+	return copied
+}
