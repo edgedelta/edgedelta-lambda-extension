@@ -115,6 +115,7 @@ func (p *Processor) Invoke(e *lambda.InvokeEvent) {
 func (p *Processor) run() {
 	requestID := ""
 	runtimeDone := false
+	faasObj.RequestID = requestID
 	for {
 		select {
 		case events := <-p.inC:
