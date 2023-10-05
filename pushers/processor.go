@@ -57,7 +57,7 @@ type edLog struct {
 type edMetric struct {
 	common
 	BilledDurationMs      float64  `json:"billed_duration_ms"`
-	InitDurationMs        float64  `json:"init_duration_ms"`
+	InitDurationMs        *float64 `json:"init_duration_ms,omitempty"`
 	RuntimeDurationMs     *float64 `json:"runtime_duration_ms,omitempty"`
 	DurationMs            float64  `json:"duration_ms"`
 	PostRuntimeDurationMs *float64 `json:"post_runtime_duration_ms,omitempty"`
@@ -124,6 +124,7 @@ func (p *Processor) run() {
 				if e.EventType != lambda.Function {
 					runtimeDone = handlePlatformEvent(e, requestID)
 				}
+				printMap("beforeIncProcess", p.tags)
 				b, err := process(e, p.cloud, p.tags)
 				if err != nil {
 					log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
@@ -143,6 +144,7 @@ func (p *Processor) run() {
 				runtimeDone = false
 			}
 		case r := <-p.invokeC:
+			printMap("beforeInvokeProcess", p.tags)
 			requestID = r
 			faasObj.RequestID = requestID
 		case <-p.stopC:
@@ -151,6 +153,7 @@ func (p *Processor) run() {
 			buf := new(bytes.Buffer)
 			for events := range p.inC {
 				for _, e := range events {
+					printMap("beforeStopProcess", p.tags)
 					b, err := process(e, p.cloud, p.tags)
 					if err != nil {
 						log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
@@ -212,10 +215,12 @@ func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]s
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse timestamp of platform.start event: %v", e)
 	}
+	printMap("beforeCopyStartEvent", tags)
 	requestDurations[requestID] = &requestDuration{Start: start}
+	delete(tags, lambda.StepTag)
 	cTags := utils.CopyMap(tags)
 	cTags[lambda.StepTag] = lambda.StartStep
-
+	printMap("afterCopyStartEvent", cTags)
 	edLog := &edLog{
 		common: common{
 			Faas:       &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
@@ -226,12 +231,16 @@ func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]s
 		},
 		Message: fmt.Sprintf("START RequestID: %s", requestID),
 	}
+	log.Printf("Start event tags: %+v", edLog.LambdaTags)
+	log.Printf("Original tags: %+v", tags)
 	return json.Marshal(edLog)
 }
 
 func processLambdaFunctionEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
 	if content, ok := e.Record.(string); ok {
 		content = strings.TrimSpace(content)
+		printMap("lambdaFunctionEvent", tags)
+		delete(tags, lambda.StepTag)
 		edLog := &edLog{
 			common: common{
 				Faas:       faasObj,
@@ -275,30 +284,33 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map
 	}
 	duration, durationOk := metric["durationMs"].(float64)
 	if !durationOk {
-		return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
+		return nil, fmt.Errorf("failed to get duration in platform.report event: %v", e)
 	}
 	billedDuration, billedOk := metric["billedDurationMs"].(float64)
 	if !billedOk {
-		return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
-	}
-	var runtimeDuration *float64
-	if durationOk && billedOk {
-		rd := duration - billedDuration
-		runtimeDuration = &rd
-	}
-
-	timestampEnd, err := time.Parse(time.RFC3339Nano, e.EventTime)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
+		return nil, fmt.Errorf("failed to get billed duration in platform.report event: %v", e)
 	}
 
 	var postRuntimeDuration *float64
-	if _, ok := requestDurations[requestID]; ok {
-		requestDurations[requestID].End = timestampEnd
+	if _, ok := requestDurations[requestID]; ok && durationOk {
 		rd := duration - float64(requestDurations[requestID].End.Sub(requestDurations[requestID].Start).Milliseconds())
 		postRuntimeDuration = &rd
 		delete(requestDurations, requestID)
 	}
+
+	var runtimeDuration *float64
+	if durationOk && postRuntimeDuration != nil {
+		rd := billedDuration - *postRuntimeDuration
+		runtimeDuration = &rd
+	}
+
+	var initDurationMs *float64
+	if idm, ok := metric["initDurationMs"].(float64); ok {
+		initDurationMs = &idm
+	} else {
+		log.Printf("failed to get init duration in platform.report event: %v", e)
+	}
+
 	edMetric := &edMetric{
 		common: common{
 			Faas:       &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
@@ -309,7 +321,7 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map
 		},
 		DurationMs:            duration,
 		BilledDurationMs:      billedDuration,
-		InitDurationMs:        metric["initDurationMs"].(float64),
+		InitDurationMs:        initDurationMs,
 		RuntimeDurationMs:     runtimeDuration,
 		PostRuntimeDurationMs: postRuntimeDuration,
 		MaxMemoryUsed:         maxMemoryUsed,
@@ -329,6 +341,14 @@ func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[st
 	if !ok {
 		return nil, fmt.Errorf("failed to get request id in platform.runtimeDone event: %v", e)
 	}
+
+	timestampEnd, err := time.Parse(time.RFC3339Nano, e.EventTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
+	}
+	printMap("beforeCopyRuntimeDoneEvent", tags)
+	requestDurations[requestID].End = timestampEnd
+	delete(tags, lambda.StepTag)
 	cTags := utils.CopyMap(tags)
 	cTags[lambda.StepTag] = lambda.EndStep
 	edLog := &edLog{
@@ -341,5 +361,11 @@ func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[st
 		},
 		Message: fmt.Sprintf("END RequestID: %s", faasObj.RequestID),
 	}
+	log.Printf("Runtimedone event tags: %+v", edLog.LambdaTags)
+	log.Printf("Original tags: %+v", tags)
 	return json.Marshal(edLog)
+}
+
+func printMap(t string, m map[string]string) {
+	log.Printf("%s: %+v", t, m)
 }
