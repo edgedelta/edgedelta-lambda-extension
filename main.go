@@ -75,41 +75,32 @@ func startExtension() (*Worker, bool) {
 			})
 			return nil, false
 		}
-		resp, err := awsClient.GetTags(functionARN)
-		if err != nil {
-			log.Printf("Failed to get Lambda Tags, err: %v", err)
-			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
-				Type:    "GetTagsError",
-				Message: err.Error(),
-			})
-			return nil, false
-		}
-		tags := make(map[string]string, len(resp.Tags))
-		for k, v := range resp.Tags {
-			tags[k] = *v
-		}
-		log.Printf("Found lambda tags: %v", tags)
-		config.Tags = tags
 
-		functionConfig, err := awsClient.GetFunctionConfiguration(functionARN)
+		function, err := awsClient.GetFunction(functionARN)
 		if err != nil {
-			log.Printf("Failed to get Lambda Function Configuration, err: %v", err)
+			log.Printf("Failed to get Lambda Function, err: %v", err)
 			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
-				Type:    "GetFunctionConfigurationError",
+				Type:    "GetFunctionError",
 				Message: err.Error(),
 			})
 			return nil, false
 		}
-		if functionConfig == nil {
+		if function == nil {
 			log.Printf("Failed to get Lambda Function Configuration, err: %v", err)
 			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
-				Type:    "GetFunctionConfigurationError",
+				Type:    "GetFunctionError",
 				Message: fmt.Sprintf("Function configuration is not found for arn: %s", functionARN),
 			})
 			return nil, false
 		}
-		config.Tags[lambda.ProcessRuntimeNameTag] = *functionConfig.Runtime
-		config.Tags[lambda.RuntimeArchitectureTag] = utils.GetRuntimeArchitecture()
+		tags := make(map[string]string, len(function.Tags))
+		for k, v := range function.Tags {
+			tags[k] = *v
+		}
+		tags[lambda.RuntimeArchitectureTag] = utils.GetRuntimeArchitecture()
+		tags[lambda.ProcessRuntimeNameTag] = *function.Configuration.Runtime
+		config.Tags = tags
+		log.Printf("Found lambda tags: %v", tags)
 	}
 	worker := NewWorker(config, extensionID)
 	worker.Start()

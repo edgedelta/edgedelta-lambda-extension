@@ -20,19 +20,8 @@ func NewAWSClient(region string) (*DefaultClient, error) {
 	return &DefaultClient{svc: lambda.New(sess, &aws.Config{Region: aws.String(region)})}, nil
 }
 
-func (c *DefaultClient) GetTags(functionARN string) (*lambda.ListTagsOutput, error) {
-	result, err := c.svc.ListTags(&lambda.ListTagsInput{
-		Resource: aws.String(functionARN),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return result, nil
-}
-
-func (c *DefaultClient) GetFunctionConfiguration(functionARN string) (*lambda.FunctionConfiguration, error) {
-	result, err := c.svc.GetFunctionConfiguration(&lambda.GetFunctionConfigurationInput{
+func (c *DefaultClient) GetFunction(functionARN string) (*lambda.GetFunctionOutput, error) {
+	result, err := c.svc.GetFunction(&lambda.GetFunctionInput{
 		FunctionName: aws.String(functionARN),
 	})
 	if err != nil {
