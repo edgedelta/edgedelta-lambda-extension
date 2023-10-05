@@ -124,7 +124,6 @@ func (p *Processor) run() {
 				if e.EventType != lambda.Function {
 					runtimeDone = handlePlatformEvent(e, requestID)
 				}
-				printMap("beforeIncProcess", p.tags)
 				b, err := process(e, p.cloud, p.tags)
 				if err != nil {
 					log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
@@ -144,7 +143,6 @@ func (p *Processor) run() {
 				runtimeDone = false
 			}
 		case r := <-p.invokeC:
-			printMap("beforeInvokeProcess", p.tags)
 			requestID = r
 			faasObj.RequestID = requestID
 		case <-p.stopC:
@@ -153,7 +151,6 @@ func (p *Processor) run() {
 			buf := new(bytes.Buffer)
 			for events := range p.inC {
 				for _, e := range events {
-					printMap("beforeStopProcess", p.tags)
 					b, err := process(e, p.cloud, p.tags)
 					if err != nil {
 						log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
@@ -215,12 +212,11 @@ func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]s
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse timestamp of platform.start event: %v", e)
 	}
-	printMap("beforeCopyStartEvent", tags)
 	requestDurations[requestID] = &requestDuration{Start: start}
-	delete(tags, lambda.StepTag)
+
 	cTags := utils.CopyMap(tags)
 	cTags[lambda.StepTag] = lambda.StartStep
-	printMap("afterCopyStartEvent", cTags)
+
 	edLog := &edLog{
 		common: common{
 			Faas:       &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
@@ -231,16 +227,13 @@ func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]s
 		},
 		Message: fmt.Sprintf("START RequestID: %s", requestID),
 	}
-	log.Printf("Start event tags: %+v", edLog.LambdaTags)
-	log.Printf("Original tags: %+v", tags)
+
 	return json.Marshal(edLog)
 }
 
 func processLambdaFunctionEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
 	if content, ok := e.Record.(string); ok {
 		content = strings.TrimSpace(content)
-		printMap("lambdaFunctionEvent", tags)
-		delete(tags, lambda.StepTag)
 		edLog := &edLog{
 			common: common{
 				Faas:       faasObj,
@@ -346,11 +339,11 @@ func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[st
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
 	}
-	printMap("beforeCopyRuntimeDoneEvent", tags)
 	requestDurations[requestID].End = timestampEnd
-	delete(tags, lambda.StepTag)
+
 	cTags := utils.CopyMap(tags)
 	cTags[lambda.StepTag] = lambda.EndStep
+
 	edLog := &edLog{
 		common: common{
 			Faas:       &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
@@ -361,11 +354,6 @@ func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[st
 		},
 		Message: fmt.Sprintf("END RequestID: %s", faasObj.RequestID),
 	}
-	log.Printf("Runtimedone event tags: %+v", edLog.LambdaTags)
-	log.Printf("Original tags: %+v", tags)
-	return json.Marshal(edLog)
-}
 
-func printMap(t string, m map[string]string) {
-	log.Printf("%s: %+v", t, m)
+	return json.Marshal(edLog)
 }
