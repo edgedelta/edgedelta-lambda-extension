@@ -277,11 +277,11 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map
 	}
 	duration, durationOk := metric["durationMs"].(float64)
 	if !durationOk {
-		return nil, fmt.Errorf("failed to get duration in platform.report event: %v", e)
+		log.Printf("failed to get duration in platform.report event: %v", e)
 	}
 	billedDuration, billedOk := metric["billedDurationMs"].(float64)
 	if !billedOk {
-		return nil, fmt.Errorf("failed to get billed duration in platform.report event: %v", e)
+		log.Printf("failed to get billed duration in platform.report event: %v", e)
 	}
 
 	var postRuntimeDuration *float64
