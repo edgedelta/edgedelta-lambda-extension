@@ -36,7 +36,7 @@ Supported ENV_VARIABLES for Lambda Function are:
 - PUSHER_MODE: 'http' for hosted environments, 'kinesis' for firehose stream. Defaults to 'http'.
 - ED_ENDPOINT: Hosted agents endpoint. Required if PUSHER_MODE is http.
 - KINESIS_ENDPOINT: Firehose stream endpoint. Required if PUSHER_MODE is kinesis.
-- ED_FORWARD_LAMBDA_TAGS: If set to 'true', logs are enriched with lambda tags (in the field "lambda_tags"). Lambda function role needs to have lambda:ListTags permission.
+- ED_FORWARD_LAMBDA_TAGS: If set to 'true', logs are enriched with lambda tags (in the field "lambda_tags"). Lambda function role needs to have lambda:GetFunction permission.
 - ED_LAMBDA_LOG_TYPES: Which types of logs you want to get from Lambda Function. Options are function,platform,extension. Default is function,platform.
 - ED_PUSH_TIMEOUT_SEC: Push timeout is the total duration of waiting for to send one batch of logs (in seconds). Default is 5.
 - ED_RETRY_INTERVAL_MS: RetryInterval is the initial interval to wait until next retry (in milliseconds). It is increased exponentially until our process is shut down. Default is 100.
