@@ -120,3 +120,12 @@ func CopyMap(m map[string]string) map[string]string {
 	}
 	return copied
 }
+
+func GetPointerIfNotDefaultValue[T comparable](value T) *T {
+	var defaultValue T
+	if value == defaultValue {
+		return nil
+	}
+
+	return &value
+}

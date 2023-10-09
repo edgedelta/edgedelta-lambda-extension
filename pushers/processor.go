@@ -19,7 +19,7 @@ const sep = '\n'
 type faas struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
-	RequestID string `json:"request_id,omitempty"`
+	RequestID string `json:"request_id"`
 }
 
 type requestDuration struct {
@@ -42,11 +42,11 @@ type cloud struct {
 }
 
 type common struct {
-	Cloud      *cloud            `json:"cloud"`
-	Faas       *faas             `json:"faas"`
-	Timestamp  string            `json:"timestamp"`
-	LogType    lambda.EventType  `json:"log_type"`
-	LambdaTags map[string]string `json:"lambda_tags,omitempty"`
+	Cloud     *cloud            `json:"cloud"`
+	Faas      *faas             `json:"faas"`
+	Timestamp string            `json:"timestamp"`
+	LogType   lambda.EventType  `json:"log_type"`
+	FaasTags  map[string]string `json:"faas.tags,omitempty"`
 }
 
 type edLog struct {
@@ -56,13 +56,13 @@ type edLog struct {
 
 type edMetric struct {
 	common
-	BilledDurationMs      float64  `json:"billed_duration_ms"`
+	BilledDurationMs      *float64 `json:"billed_duration_ms,omitempty"`
 	InitDurationMs        *float64 `json:"init_duration_ms,omitempty"`
 	RuntimeDurationMs     *float64 `json:"runtime_duration_ms,omitempty"`
-	DurationMs            float64  `json:"duration_ms"`
+	DurationMs            *float64 `json:"duration_ms,omitempty"`
 	PostRuntimeDurationMs *float64 `json:"post_runtime_duration_ms,omitempty"`
-	MaxMemoryUsed         float64  `json:"max_memory_used"`
-	MemorySize            float64  `json:"memory_size"`
+	MaxMemoryUsed         *float64 `json:"max_memory_used,omitempty"`
+	MemorySize            *float64 `json:"memory_size,omitempty"`
 	MemoryLeft            *float64 `json:"memory_left,omitempty"`
 	MemoryPercent         *float64 `json:"memory_percent,omitempty"`
 }
@@ -219,11 +219,11 @@ func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]s
 
 	edLog := &edLog{
 		common: common{
-			Faas:       &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
-			Cloud:      cloudObj,
-			LogType:    lambda.PlatformStart,
-			LambdaTags: cTags,
-			Timestamp:  e.EventTime,
+			Faas:      &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
+			Cloud:     cloudObj,
+			LogType:   lambda.PlatformStart,
+			FaasTags:  cTags,
+			Timestamp: e.EventTime,
 		},
 		Message: fmt.Sprintf("START RequestID: %s", requestID),
 	}
@@ -236,11 +236,11 @@ func processLambdaFunctionEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map
 		content = strings.TrimSpace(content)
 		edLog := &edLog{
 			common: common{
-				Faas:       faasObj,
-				Cloud:      cloudObj,
-				LogType:    lambda.Function,
-				LambdaTags: tags,
-				Timestamp:  e.EventTime,
+				Faas:      faasObj,
+				Cloud:     cloudObj,
+				LogType:   lambda.Function,
+				Timestamp: e.EventTime,
+				FaasTags:  tags,
 			},
 			Message: content,
 		}
@@ -275,10 +275,12 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map
 		memoryLeft = &mLeft
 		memoryPercent = &mPercent
 	}
+
 	duration, durationOk := metric["durationMs"].(float64)
 	if !durationOk {
 		log.Printf("failed to get duration in platform.report event: %v", e)
 	}
+
 	billedDuration, billedOk := metric["billedDurationMs"].(float64)
 	if !billedOk {
 		log.Printf("failed to get billed duration in platform.report event: %v", e)
@@ -297,31 +299,34 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map
 		runtimeDuration = &rd
 	}
 
-	var initDurationMs *float64
-	if idm, ok := metric["initDurationMs"].(float64); ok {
-		initDurationMs = &idm
-	} else {
+	initDurationMs, ok := metric["initDurationMs"].(float64)
+	if !ok {
 		log.Printf("failed to get init duration in platform.report event: %v", e)
 	}
 
 	edMetric := &edMetric{
 		common: common{
-			Faas:       &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
-			Cloud:      cloudObj,
-			LogType:    lambda.PlatformReport,
-			LambdaTags: tags,
-			Timestamp:  e.EventTime,
+			Faas: &faas{
+				Name:      faasObj.Name,
+				Version:   faasObj.Version,
+				RequestID: requestID,
+			},
+			Cloud:     cloudObj,
+			LogType:   lambda.PlatformReport,
+			Timestamp: e.EventTime,
+			FaasTags:  tags,
 		},
-		DurationMs:            duration,
-		BilledDurationMs:      billedDuration,
-		InitDurationMs:        initDurationMs,
+		DurationMs:            utils.GetPointerIfNotDefaultValue(duration),
+		BilledDurationMs:      utils.GetPointerIfNotDefaultValue(billedDuration),
+		InitDurationMs:        utils.GetPointerIfNotDefaultValue(initDurationMs),
+		MaxMemoryUsed:         utils.GetPointerIfNotDefaultValue(maxMemoryUsed),
+		MemorySize:            utils.GetPointerIfNotDefaultValue(memorySize),
 		RuntimeDurationMs:     runtimeDuration,
 		PostRuntimeDurationMs: postRuntimeDuration,
-		MaxMemoryUsed:         maxMemoryUsed,
-		MemorySize:            memorySize,
 		MemoryLeft:            memoryLeft,
 		MemoryPercent:         memoryPercent,
 	}
+
 	return json.Marshal(edMetric)
 }
 
@@ -346,11 +351,11 @@ func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[st
 
 	edLog := &edLog{
 		common: common{
-			Faas:       &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
-			Cloud:      cloudObj,
-			LogType:    lambda.PlatformRuntimeDone,
-			LambdaTags: cTags,
-			Timestamp:  e.EventTime,
+			Faas:      &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
+			Cloud:     cloudObj,
+			LogType:   lambda.PlatformRuntimeDone,
+			FaasTags:  cTags,
+			Timestamp: e.EventTime,
 		},
 		Message: fmt.Sprintf("END RequestID: %s", faasObj.RequestID),
 	}
