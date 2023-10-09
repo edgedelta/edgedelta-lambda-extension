@@ -62,11 +62,9 @@ func startExtension() (*Worker, bool) {
 		return nil, false
 	}
 	config.AccountID = registerResp.AccountID
-	region := config.Region
-	functionARN := buildFunctionARN(registerResp, region)
-	config.FunctionARN = functionARN
+	config.FunctionARN = buildFunctionARN(registerResp, config.Region)
 	if config.ForwardTags {
-		awsClient, err := lambda.NewAWSClient(region)
+		awsClient, err := lambda.NewAWSClient(config.Region)
 		if err != nil {
 			log.Printf("Failed to create AWS Lambda Client, err: %v", err)
 			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
@@ -76,7 +74,7 @@ func startExtension() (*Worker, bool) {
 			return nil, false
 		}
 
-		function, err := awsClient.GetFunction(functionARN)
+		function, err := awsClient.GetFunction(config.FunctionARN)
 		if err != nil {
 			log.Printf("Failed to get Lambda Function, err: %v", err)
 			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
@@ -86,21 +84,20 @@ func startExtension() (*Worker, bool) {
 			return nil, false
 		}
 		if function == nil {
-			log.Printf("Failed to get Lambda Function Configuration, err: %v", err)
+			log.Printf("Failed to get Lambda Function, err: %v", err)
 			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
 				Type:    "GetFunctionError",
-				Message: fmt.Sprintf("Function configuration is not found for arn: %s", functionARN),
+				Message: fmt.Sprintf("Function is not found for arn: %s", config.FunctionARN),
 			})
 			return nil, false
 		}
-		tags := make(map[string]string, len(function.Tags))
+		config.Tags = make(map[string]string, len(function.Tags))
 		for k, v := range function.Tags {
-			tags[k] = *v
+			config.Tags[k] = *v
 		}
-		tags[lambda.RuntimeArchitectureTag] = utils.GetRuntimeArchitecture()
-		tags[lambda.ProcessRuntimeNameTag] = *function.Configuration.Runtime
-		config.Tags = tags
-		log.Printf("Found lambda tags: %v", tags)
+		config.HostArchitecture = utils.GetRuntimeArchitecture()
+		config.ProcessRuntimeName = *function.Configuration.Runtime
+		log.Printf("Found lambda tags: %v", config.Tags)
 	}
 	worker := NewWorker(config, extensionID)
 	worker.Start()

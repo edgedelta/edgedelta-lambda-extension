@@ -14,11 +14,6 @@ const (
 	extensionErrorType           = "Lambda-Extension-Function-Error-Type"
 	LambdaTelemetryEndpoint      = "2022-07-01/telemetry"
 	LambdaExtensionEndpoint      = "2020-01-01/extension"
-	StartStep                    = "START"
-	EndStep                      = "END"
-	StepTag                      = "step"
-	ProcessRuntimeNameTag        = "process.runtime.name"
-	RuntimeArchitectureTag       = "host.arch"
 )
 
 // RegisterResponse is the body of the response for /register

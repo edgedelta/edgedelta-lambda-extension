@@ -20,6 +20,7 @@ type faas struct {
 	Name      string `json:"name"`
 	Version   string `json:"version"`
 	RequestID string `json:"request_id"`
+	Step      string `json:"step,omitempty"`
 }
 
 type requestDuration struct {
@@ -42,11 +43,13 @@ type cloud struct {
 }
 
 type common struct {
-	Cloud     *cloud            `json:"cloud"`
-	Faas      *faas             `json:"faas"`
-	Timestamp string            `json:"timestamp"`
-	LogType   lambda.EventType  `json:"log_type"`
-	FaasTags  map[string]string `json:"faas.tags,omitempty"`
+	Cloud              *cloud            `json:"cloud"`
+	Faas               *faas             `json:"faas"`
+	Timestamp          string            `json:"timestamp"`
+	LogType            lambda.EventType  `json:"log_type"`
+	FaasTags           map[string]string `json:"faas.tags,omitempty"`
+	HostArchitecture   string            `json:"host.arch,omitempty"`
+	ProcessRuntimeName string            `json:"process.runtime.name,omitempty"`
 }
 
 type edLog struct {
@@ -56,39 +59,43 @@ type edLog struct {
 
 type edMetric struct {
 	common
-	BilledDurationMs      *float64 `json:"billed_duration_ms,omitempty"`
-	InitDurationMs        *float64 `json:"init_duration_ms,omitempty"`
-	RuntimeDurationMs     *float64 `json:"runtime_duration_ms,omitempty"`
-	DurationMs            *float64 `json:"duration_ms,omitempty"`
-	PostRuntimeDurationMs *float64 `json:"post_runtime_duration_ms,omitempty"`
-	MaxMemoryUsed         *float64 `json:"max_memory_used,omitempty"`
-	MemorySize            *float64 `json:"memory_size,omitempty"`
-	MemoryLeft            *float64 `json:"memory_left,omitempty"`
-	MemoryPercent         *float64 `json:"memory_percent,omitempty"`
+	BilledDurationMs      *float64 `json:"faas.billed_duration_ms,omitempty"`
+	InitDurationMs        *float64 `json:"faas.init_duration_ms,omitempty"`
+	RuntimeDurationMs     *float64 `json:"faas.runtime_duration_ms,omitempty"`
+	DurationMs            *float64 `json:"faas.duration_ms,omitempty"`
+	PostRuntimeDurationMs *float64 `json:"faas.post_runtime_duration_ms,omitempty"`
+	MaxMemoryUsed         *float64 `json:"faas.max_memory_used,omitempty"`
+	MemorySize            *float64 `json:"faas.memory_size,omitempty"`
+	MemoryLeft            *float64 `json:"faas.memory_left,omitempty"`
+	MemoryPercent         *float64 `json:"faas.memory_percent,omitempty"`
 }
 
 type Processor struct {
-	tags         map[string]string
-	cloud        *cloud
-	outC         chan []byte
-	inC          chan []*lambda.LambdaEvent
-	invokeC      chan string
-	runtimeDoneC chan struct{}
-	stopC        chan struct{}
-	stoppedC     chan struct{}
+	tags           map[string]string
+	cloud          *cloud
+	hostArch       string
+	processRuntime string
+	outC           chan []byte
+	inC            chan []*lambda.LambdaEvent
+	invokeC        chan string
+	runtimeDoneC   chan struct{}
+	stopC          chan struct{}
+	stoppedC       chan struct{}
 }
 
 // NewProcessor initializes the log processor.
 func NewProcessor(conf *cfg.Config, outC chan []byte, inC chan []*lambda.LambdaEvent, runtimeDoneC chan struct{}) *Processor {
 	return &Processor{
-		outC:         outC,
-		inC:          inC,
-		invokeC:      make(chan string),
-		runtimeDoneC: runtimeDoneC,
-		stopC:        make(chan struct{}),
-		stoppedC:     make(chan struct{}),
-		tags:         conf.Tags,
-		cloud:        &cloud{ResourceID: conf.FunctionARN, AccountID: conf.AccountID, Region: conf.Region},
+		outC:           outC,
+		inC:            inC,
+		invokeC:        make(chan string),
+		runtimeDoneC:   runtimeDoneC,
+		stopC:          make(chan struct{}),
+		stoppedC:       make(chan struct{}),
+		tags:           conf.Tags,
+		cloud:          &cloud{ResourceID: conf.FunctionARN, AccountID: conf.AccountID, Region: conf.Region},
+		hostArch:       conf.HostArchitecture,
+		processRuntime: conf.ProcessRuntimeName,
 	}
 }
 
@@ -113,18 +120,17 @@ func (p *Processor) Invoke(e *lambda.InvokeEvent) {
 }
 
 func (p *Processor) run() {
-	requestID := ""
+	faasObj.RequestID = ""
 	runtimeDone := false
-	faasObj.RequestID = requestID
 	for {
 		select {
 		case events := <-p.inC:
 			buf := new(bytes.Buffer)
 			for _, e := range events {
 				if e.EventType != lambda.Function {
-					runtimeDone = handlePlatformEvent(e, requestID)
+					runtimeDone = handlePlatformEvent(e, faasObj.RequestID)
 				}
-				b, err := process(e, p.cloud, p.tags)
+				b, err := process(e, p.cloud, p.hostArch, p.processRuntime, p.tags)
 				if err != nil {
 					log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
 					continue
@@ -138,20 +144,18 @@ func (p *Processor) run() {
 			if runtimeDone {
 				log.Print("Runtime is done")
 				p.runtimeDoneC <- struct{}{}
-				requestID = ""
-				faasObj.RequestID = requestID
+				faasObj.RequestID = ""
 				runtimeDone = false
 			}
 		case r := <-p.invokeC:
-			requestID = r
-			faasObj.RequestID = requestID
+			faasObj.RequestID = r
 		case <-p.stopC:
 			close(p.inC)
 			// drain
 			buf := new(bytes.Buffer)
 			for events := range p.inC {
 				for _, e := range events {
-					b, err := process(e, p.cloud, p.tags)
+					b, err := process(e, p.cloud, p.hostArch, p.processRuntime, p.tags)
 					if err != nil {
 						log.Printf("Log Processor failed to process log item %+v, err: %v", e, err)
 						continue
@@ -184,22 +188,22 @@ func handlePlatformEvent(e *lambda.LambdaEvent, requestID string) bool {
 	return false
 }
 
-func process(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
+func process(e *lambda.LambdaEvent, cloudObj *cloud, hostArch, processRuntime string, tags map[string]string) ([]byte, error) {
 	switch e.EventType {
 	case lambda.PlatformStart:
-		return processStartEvent(e, cloudObj, tags)
+		return processStartEvent(e, cloudObj, hostArch, processRuntime, tags)
 	case lambda.Function:
-		return processLambdaFunctionEvent(e, cloudObj, tags)
+		return processLambdaFunctionEvent(e, cloudObj, hostArch, processRuntime, tags)
 	case lambda.PlatformReport:
-		return processPlatformReportEvent(e, cloudObj, tags)
+		return processPlatformReportEvent(e, cloudObj, hostArch, processRuntime, tags)
 	case lambda.PlatformRuntimeDone:
-		return processRuntimeDoneEvent(e, cloudObj, tags)
+		return processRuntimeDoneEvent(e, cloudObj, hostArch, processRuntime, tags)
 	default:
 		return nil, nil
 	}
 }
 
-func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
+func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch, processRuntime string, tags map[string]string) ([]byte, error) {
 	content, ok := e.Record.(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("failed to parse platform.start event: %v", e)
@@ -214,16 +218,15 @@ func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]s
 	}
 	requestDurations[requestID] = &requestDuration{Start: start}
 
-	cTags := utils.CopyMap(tags)
-	cTags[lambda.StepTag] = lambda.StartStep
-
 	edLog := &edLog{
 		common: common{
-			Faas:      &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
-			Cloud:     cloudObj,
-			LogType:   lambda.PlatformStart,
-			FaasTags:  cTags,
-			Timestamp: e.EventTime,
+			Faas:               &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID, Step: StartStep},
+			Cloud:              cloudObj,
+			LogType:            lambda.PlatformStart,
+			Timestamp:          e.EventTime,
+			FaasTags:           tags,
+			HostArchitecture:   hostArch,
+			ProcessRuntimeName: processRuntime,
 		},
 		Message: fmt.Sprintf("START RequestID: %s", requestID),
 	}
@@ -231,16 +234,18 @@ func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]s
 	return json.Marshal(edLog)
 }
 
-func processLambdaFunctionEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
+func processLambdaFunctionEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch, processRuntime string, tags map[string]string) ([]byte, error) {
 	if content, ok := e.Record.(string); ok {
 		content = strings.TrimSpace(content)
 		edLog := &edLog{
 			common: common{
-				Faas:      faasObj,
-				Cloud:     cloudObj,
-				LogType:   lambda.Function,
-				Timestamp: e.EventTime,
-				FaasTags:  tags,
+				Faas:               faasObj,
+				Cloud:              cloudObj,
+				LogType:            lambda.Function,
+				Timestamp:          e.EventTime,
+				FaasTags:           tags,
+				HostArchitecture:   hostArch,
+				ProcessRuntimeName: processRuntime,
 			},
 			Message: content,
 		}
@@ -249,7 +254,7 @@ func processLambdaFunctionEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map
 	return nil, fmt.Errorf("failed to parse function event: %v", e)
 }
 
-func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
+func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch, processRuntime string, tags map[string]string) ([]byte, error) {
 	// metrics format is:
 	// {"durationMs":1251.76,"billedDurationMs":1252,"memorySizeMB":128,"maxMemoryUsedMB":70,"initDurationMs":270.81}
 	content, ok := e.Record.(map[string]interface{})
@@ -311,10 +316,12 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map
 				Version:   faasObj.Version,
 				RequestID: requestID,
 			},
-			Cloud:     cloudObj,
-			LogType:   lambda.PlatformReport,
-			Timestamp: e.EventTime,
-			FaasTags:  tags,
+			Cloud:              cloudObj,
+			LogType:            lambda.PlatformReport,
+			Timestamp:          e.EventTime,
+			FaasTags:           tags,
+			HostArchitecture:   hostArch,
+			ProcessRuntimeName: processRuntime,
 		},
 		DurationMs:            utils.GetPointerIfNotDefaultValue(duration),
 		BilledDurationMs:      utils.GetPointerIfNotDefaultValue(billedDuration),
@@ -330,7 +337,7 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map
 	return json.Marshal(edMetric)
 }
 
-func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[string]string) ([]byte, error) {
+func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch, processRuntime string, tags map[string]string) ([]byte, error) {
 	content, ok := e.Record.(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("failed to parse platform.runtimeDone event: %v", e)
@@ -340,22 +347,23 @@ func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, tags map[st
 		return nil, fmt.Errorf("failed to get request id in platform.runtimeDone event: %v", e)
 	}
 
-	timestampEnd, err := time.Parse(time.RFC3339Nano, e.EventTime)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
+	if _, ok := requestDurations[requestID]; ok {
+		timestampEnd, err := time.Parse(time.RFC3339Nano, e.EventTime)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse platform.report event: %v", e)
+		}
+		requestDurations[requestID].End = timestampEnd
 	}
-	requestDurations[requestID].End = timestampEnd
-
-	cTags := utils.CopyMap(tags)
-	cTags[lambda.StepTag] = lambda.EndStep
 
 	edLog := &edLog{
 		common: common{
-			Faas:      &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID},
-			Cloud:     cloudObj,
-			LogType:   lambda.PlatformRuntimeDone,
-			FaasTags:  cTags,
-			Timestamp: e.EventTime,
+			Faas:               &faas{Name: faasObj.Name, Version: faasObj.Version, RequestID: requestID, Step: EndStep},
+			Cloud:              cloudObj,
+			LogType:            lambda.PlatformRuntimeDone,
+			Timestamp:          e.EventTime,
+			FaasTags:           tags,
+			HostArchitecture:   hostArch,
+			ProcessRuntimeName: processRuntime,
 		},
 		Message: fmt.Sprintf("END RequestID: %s", faasObj.RequestID),
 	}
