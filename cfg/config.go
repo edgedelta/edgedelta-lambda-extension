@@ -26,19 +26,22 @@ var (
 
 // Config for storing all parameters
 type Config struct {
-	EDEndpoint        string
-	KinesisEndpoint   string
-	PusherMode        string
-	ForwardTags       bool
-	LogTypes          []string
-	BfgConfig         *lambda.BufferingCfg
-	PushTimeout       time.Duration
-	RetryInterval     time.Duration
-	Tags              map[string]string
-	Region            string
-	FunctionARN       string
-	BufferSize        int
-	FlushAtNextInvoke bool
+	EDEndpoint         string
+	KinesisEndpoint    string
+	PusherMode         string
+	ForwardTags        bool
+	LogTypes           []string
+	BfgConfig          *lambda.BufferingCfg
+	PushTimeout        time.Duration
+	RetryInterval      time.Duration
+	Tags               map[string]string
+	AccountID          string
+	Region             string
+	FunctionARN        string
+	ProcessRuntimeName string
+	HostArchitecture   string
+	BufferSize         int
+	FlushAtNextInvoke  bool
 }
 
 func GetConfigAndValidate() (*Config, error) {

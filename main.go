@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -60,11 +61,10 @@ func startExtension() (*Worker, bool) {
 		})
 		return nil, false
 	}
-	region := config.Region
-	functionARN := buildFunctionARN(registerResp, region)
-	config.FunctionARN = functionARN
+	config.AccountID = registerResp.AccountID
+	config.FunctionARN = buildFunctionARN(registerResp, config.Region)
 	if config.ForwardTags {
-		awsClient, err := lambda.NewAWSClient(region)
+		awsClient, err := lambda.NewAWSClient(config.Region)
 		if err != nil {
 			log.Printf("Failed to create AWS Lambda Client, err: %v", err)
 			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
@@ -73,21 +73,38 @@ func startExtension() (*Worker, bool) {
 			})
 			return nil, false
 		}
-		resp, err := awsClient.GetTags(functionARN)
+
+		function, err := awsClient.GetFunction(config.FunctionARN)
 		if err != nil {
-			log.Printf("Failed to get Lambda Tags, err: %v", err)
+			log.Printf("Failed to get Lambda Function, err: %v", err)
 			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
-				Type:    "GetTagsError",
+				Type:    "GetFunctionError",
 				Message: err.Error(),
 			})
 			return nil, false
 		}
-		tags := make(map[string]string, len(resp.Tags))
-		for k, v := range resp.Tags {
-			tags[k] = *v
+		if function == nil {
+			log.Printf("Failed to get Lambda Function, err: %v", err)
+			lambdaClient.InitError(ctx, extensionID, lambda.ClientError, lambda.LambdaError{
+				Type:    "GetFunctionError",
+				Message: fmt.Sprintf("Function is not found for arn: %s", config.FunctionARN),
+			})
+			return nil, false
 		}
-		log.Printf("Found lambda tags: %v", tags)
-		config.Tags = tags
+		config.Tags = make(map[string]string, len(function.Tags))
+		for k, v := range function.Tags {
+			config.Tags[k] = *v
+		}
+
+		if function.Configuration != nil {
+			architectures := make([]string, 0, len(function.Configuration.Architectures))
+			for _, arch := range function.Configuration.Architectures {
+				architectures = append(architectures, *arch)
+			}
+			config.HostArchitecture = strings.Join(architectures, ",")
+			config.ProcessRuntimeName = *function.Configuration.Runtime
+		}
+		log.Printf("Found lambda tags: %v", config.Tags)
 	}
 	worker := NewWorker(config, extensionID)
 	worker.Start()
