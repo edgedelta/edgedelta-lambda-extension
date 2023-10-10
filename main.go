@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -16,7 +17,6 @@ import (
 	"github.com/edgedelta/edgedelta-lambda-extension/handlers"
 	"github.com/edgedelta/edgedelta-lambda-extension/lambda"
 	"github.com/edgedelta/edgedelta-lambda-extension/pushers"
-	"github.com/edgedelta/edgedelta-lambda-extension/utils"
 )
 
 const invocationTimeoutGracePeriod = 50 * time.Millisecond
@@ -95,8 +95,15 @@ func startExtension() (*Worker, bool) {
 		for k, v := range function.Tags {
 			config.Tags[k] = *v
 		}
-		config.HostArchitecture = utils.GetRuntimeArchitecture()
-		config.ProcessRuntimeName = *function.Configuration.Runtime
+
+		if function.Configuration != nil {
+			architectures := make([]string, 0, len(function.Configuration.Architectures))
+			for _, arch := range function.Configuration.Architectures {
+				architectures = append(architectures, *arch)
+			}
+			config.HostArchitecture = strings.Join(architectures, ",")
+			config.ProcessRuntimeName = *function.Configuration.Runtime
+		}
 		log.Printf("Found lambda tags: %v", config.Tags)
 	}
 	worker := NewWorker(config, extensionID)
