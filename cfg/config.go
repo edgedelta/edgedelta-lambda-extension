@@ -40,6 +40,7 @@ type Config struct {
 	FunctionARN        string
 	ProcessRuntimeName string
 	HostArchitecture   string
+	MemorySize         string
 	BufferSize         int
 	FlushAtNextInvoke  bool
 }

@@ -17,11 +17,12 @@ import (
 const sep = '\n'
 
 type faas struct {
-	Name      string            `json:"name"`
-	Version   string            `json:"version"`
-	RequestID string            `json:"request_id"`
-	Step      string            `json:"step,omitempty"`
-	Tags      map[string]string `json:"tags,omitempty"`
+	Name       string            `json:"name"`
+	Version    string            `json:"version"`
+	RequestID  string            `json:"request_id"`
+	MemorySize string            `json:"memory_size,omitempty"`
+	Step       string            `json:"step,omitempty"`
+	Tags       map[string]string `json:"tags,omitempty"`
 }
 
 type requestDuration struct {
@@ -65,7 +66,6 @@ type edMetric struct {
 	DurationMs            *float64 `json:"faas.duration_ms,omitempty"`
 	PostRuntimeDurationMs *float64 `json:"faas.post_runtime_duration_ms,omitempty"`
 	MaxMemoryUsed         *float64 `json:"faas.max_memory_used,omitempty"`
-	MemorySize            *float64 `json:"faas.memory_size,omitempty"`
 	MemoryLeft            *float64 `json:"faas.memory_left,omitempty"`
 	MemoryPercent         *float64 `json:"faas.memory_percent,omitempty"`
 }
@@ -75,6 +75,7 @@ type Processor struct {
 	cloud          *cloud
 	hostArch       string
 	processRuntime string
+	memorySize     string
 	outC           chan []byte
 	inC            chan []*lambda.LambdaEvent
 	invokeC        chan string
@@ -96,6 +97,7 @@ func NewProcessor(conf *cfg.Config, outC chan []byte, inC chan []*lambda.LambdaE
 		cloud:          &cloud{ResourceID: conf.FunctionARN, AccountID: conf.AccountID, Region: conf.Region},
 		hostArch:       conf.HostArchitecture,
 		processRuntime: conf.ProcessRuntimeName,
+		memorySize:     conf.MemorySize,
 	}
 }
 
@@ -121,6 +123,7 @@ func (p *Processor) Invoke(e *lambda.InvokeEvent) {
 
 func (p *Processor) run() {
 	faasObj.Tags = p.tags
+	faasObj.MemorySize = p.memorySize
 	faasObj.RequestID = ""
 	runtimeDone := false
 	for {
@@ -222,11 +225,12 @@ func processStartEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch, process
 	edLog := &edLog{
 		common: common{
 			Faas: &faas{
-				Name:      faasObj.Name,
-				Version:   faasObj.Version,
-				Tags:      faasObj.Tags,
-				RequestID: requestID,
-				Step:      StartStep,
+				Name:       faasObj.Name,
+				Version:    faasObj.Version,
+				Tags:       faasObj.Tags,
+				MemorySize: faasObj.MemorySize,
+				RequestID:  requestID,
+				Step:       StartStep,
 			},
 			Cloud:              cloudObj,
 			LogType:            lambda.PlatformStart,
@@ -317,10 +321,11 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch
 	edMetric := &edMetric{
 		common: common{
 			Faas: &faas{
-				Name:      faasObj.Name,
-				Version:   faasObj.Version,
-				Tags:      faasObj.Tags,
-				RequestID: requestID,
+				Name:       faasObj.Name,
+				Version:    faasObj.Version,
+				Tags:       faasObj.Tags,
+				MemorySize: faasObj.MemorySize,
+				RequestID:  requestID,
 			},
 			Cloud:              cloudObj,
 			LogType:            lambda.PlatformReport,
@@ -332,7 +337,6 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch
 		BilledDurationMs:      utils.GetPointerIfNotDefaultValue(billedDuration),
 		InitDurationMs:        utils.GetPointerIfNotDefaultValue(initDurationMs),
 		MaxMemoryUsed:         utils.GetPointerIfNotDefaultValue(maxMemoryUsed),
-		MemorySize:            utils.GetPointerIfNotDefaultValue(memorySize),
 		RuntimeDurationMs:     runtimeDuration,
 		PostRuntimeDurationMs: postRuntimeDuration,
 		MemoryLeft:            memoryLeft,
@@ -363,11 +367,12 @@ func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch, p
 	edLog := &edLog{
 		common: common{
 			Faas: &faas{
-				Name:      faasObj.Name,
-				Version:   faasObj.Version,
-				Tags:      faasObj.Tags,
-				RequestID: requestID,
-				Step:      EndStep,
+				Name:       faasObj.Name,
+				Version:    faasObj.Version,
+				Tags:       faasObj.Tags,
+				MemorySize: faasObj.MemorySize,
+				RequestID:  requestID,
+				Step:       EndStep,
 			},
 			Cloud:              cloudObj,
 			LogType:            lambda.PlatformRuntimeDone,

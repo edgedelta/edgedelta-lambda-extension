@@ -103,6 +103,7 @@ func startExtension() (*Worker, bool) {
 			}
 			config.HostArchitecture = strings.Join(architectures, ",")
 			config.ProcessRuntimeName = *function.Configuration.Runtime
+			config.MemorySize = fmt.Sprintf("%d", *function.Configuration.MemorySize)
 		}
 		log.Printf("Found lambda tags: %v", config.Tags)
 	}
