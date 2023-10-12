@@ -65,9 +65,9 @@ type edMetric struct {
 	RuntimeDurationMs     *float64 `json:"faas.runtime_duration_ms,omitempty"`
 	DurationMs            *float64 `json:"faas.duration_ms,omitempty"`
 	PostRuntimeDurationMs *float64 `json:"faas.post_runtime_duration_ms,omitempty"`
-	MaxMemoryUsed         *int     `json:"faas.max_memory_used,omitempty"`
-	MemoryLeft            *int     `json:"faas.memory_left,omitempty"`
-	MemoryPercent         *int     `json:"faas.memory_percent,omitempty"`
+	MaxMemoryUsed         *float64 `json:"faas.max_memory_used,omitempty"`
+	MemoryLeft            *float64 `json:"faas.memory_left,omitempty"`
+	MemoryPercent         *float64 `json:"faas.memory_percent,omitempty"`
 }
 
 type Processor struct {
@@ -279,10 +279,10 @@ func processPlatformReportEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch
 		return nil, fmt.Errorf("failed to get request id in platform.report event: %v", e)
 	}
 
-	maxMemoryUsed, maxOk := metric["maxMemoryUsedMB"].(int)
-	memorySize, sizeOk := metric["memorySizeMB"].(int)
-	var memoryLeft *int
-	var memoryPercent *int
+	maxMemoryUsed, maxOk := metric["maxMemoryUsedMB"].(float64)
+	memorySize, sizeOk := metric["memorySizeMB"].(float64)
+	var memoryLeft *float64
+	var memoryPercent *float64
 	if maxOk && sizeOk {
 		mLeft := memorySize - maxMemoryUsed
 		mPercent := mLeft / memorySize * 100
