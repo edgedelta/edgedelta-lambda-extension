@@ -93,7 +93,10 @@ func startExtension() (*Worker, bool) {
 		}
 		config.Tags = make(map[string]string, len(function.Tags))
 		for k, v := range function.Tags {
-			config.Tags[k] = *v
+			var sb strings.Builder
+			sb.WriteString(config.TagPrefix)
+			sb.WriteString(k)
+			config.Tags[sb.String()] = *v
 		}
 
 		if function.Configuration != nil {

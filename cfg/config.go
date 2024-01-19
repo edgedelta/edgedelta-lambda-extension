@@ -43,6 +43,7 @@ type Config struct {
 	MemorySize         string
 	BufferSize         int
 	FlushAtNextInvoke  bool
+	TagPrefix          string
 }
 
 func GetConfigAndValidate() (*Config, error) {
@@ -150,6 +151,11 @@ func GetConfigAndValidate() (*Config, error) {
 		config.LogTypes = usableLogTypes
 	} else {
 		config.LogTypes = []string{"platform", "function"}
+	}
+
+	tagPrefixStr := os.Getenv("ED_TAG_PREFIX")
+	if tagPrefixStr != "" {
+		config.TagPrefix = strings.TrimSpace(tagPrefixStr)
 	}
 
 	var err error
