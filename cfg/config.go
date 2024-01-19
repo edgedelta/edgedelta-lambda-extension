@@ -154,7 +154,6 @@ func GetConfigAndValidate() (*Config, error) {
 	}
 
 	tagPrefixStr := os.Getenv("ED_TAG_PREFIX")
-	config.TagPrefix = ""
 	if tagPrefixStr != "" {
 		config.TagPrefix = strings.TrimSpace(tagPrefixStr)
 	}
