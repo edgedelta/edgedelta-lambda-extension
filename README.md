@@ -43,7 +43,7 @@ Supported ENV_VARIABLES for Lambda Function are:
 - ED_BUFFER_SIZE_MB: Maximum buffer size to keep logs (in MB). Default is 20. If stored logs exceed this limit, some logs may be dropped! 
 - ED_FLUSH_AT_NEXT_INVOKE: If set to 'true', logs are flushed at the start of next invocation of the function. Normally logs are flushed after function execution finishes which can add to total running time. For lambda functions that are executed periodically, flush at next invoke can be turned on to reduce cost.
 - ED_PRINT_EXTENSION_LOGS: If set to 'true', extension's own logs are printed in CloudWatch.
-- ED_TAG_PREFIX: The tag prefix to be added to the source tags. For example, if ED_TAG_PREFIX is "ed_prefix_", then all the tags will be prefixed with "ed_preix_". Default is empty.
+- ED_TAG_PREFIX: The tag prefix to be added to the source tags. For example, if ED_TAG_PREFIX is "ed_prefix_", then all the tags will be prefixed with "ed_prefix_". Default is empty.
   
 Lambda can buffer logs and deliver them to the subscriber. You can configure this behavior in the subscription request by specifying the following optional fields.
 - ED_LAMBDA_MAX_ITEMS: The maximum number of events to buffer in memory. Default: 1000. Minimum: 1000. Maximum: 10000. This is also the size of the channel that our http server writes into and pushers consume.
