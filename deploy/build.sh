@@ -31,7 +31,7 @@ rm -rf "${project_root}/bin"
 mkdir -p "${project_root}/bin/extensions"
 
 cd "${project_root}"
-GOOS=linux GOARCH=$arch_type go build -o "$ext_path" main.go
+CGO_ENABLED=0 GOOS=linux GOARCH=$arch_type go build -o "$ext_path" main.go
 chmod +x "$ext_path"
 
 cd "${project_root}/bin"
