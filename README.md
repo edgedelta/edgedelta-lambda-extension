@@ -14,7 +14,7 @@ Building and saving package into a bin/extensions directory:
 
 ```
 $ cd edgedelta-lambda-extension
-$ GOOS=linux GOARCH=amd64 go build -o bin/extensions/edgedelta-lambda-extension main.go
+$ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/extensions/edgedelta-lambda-extension main.go
 $ chmod +x bin/extensions/edgedelta-lambda-extension
 ```
 
