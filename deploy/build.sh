@@ -31,11 +31,12 @@ rm -rf "${project_root}/bin"
 mkdir -p "${project_root}/bin/extensions"
 
 cd "${project_root}"
-CGO_ENABLED=0 GOOS=linux GOARCH=$arch_type go build -o "$ext_path" main.go
+go mod tidy && go mod vendor
+CGO_ENABLED=0 GOOS=linux GOARCH=$arch_type go build -ldflags="-s -w" -o "$ext_path" main.go
 chmod +x "$ext_path"
 
 cd "${project_root}/bin"
-zip -r "$zip_name" "extensions/"
+zip -r9 -q -X "$zip_name" "extensions/"
 
 echo "Uploading $zip_name to s3://$bucket_name/$zip_name"
 aws s3 cp "$zip_name" "s3://$bucket_name/$zip_name"
