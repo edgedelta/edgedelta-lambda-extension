@@ -59,6 +59,7 @@ type Pusher struct {
 	inC               chan []byte
 	invokeC           chan *invocation
 	runtimeDoneC      chan struct{}
+	forceFlushing     chan chan bool
 	stopC             chan time.Duration
 	stoppedC          chan struct{}
 	kinesisClient     *firehose.Firehose
@@ -97,6 +98,8 @@ func NewPusher(conf *cfg.Config, inC chan []byte, runtimeDoneC chan struct{}) *P
 		p.makeRequestFunc = p.makeHTTPRequest
 		p.endpoint = conf.EDEndpoint
 	}
+
+	p.forceFlushing = make(chan chan bool, 1)
 	return p
 }
 
@@ -131,13 +134,53 @@ func (p *Pusher) run() {
 		case b := <-p.inC:
 			buf.Write(b)
 		case <-p.runtimeDoneC:
+			contextIsDone := false
+			select {
+			case <-ctx.Done():
+				contextIsDone = true
+			default:
+			}
+
 			if !p.flushAtNextInvoke {
 				payload := buf.Bytes()
-				utils.Go("Pusher.flush", func() {
-					p.flush(ctx, payload, flushRespC)
-				})
 				buf = new(bytes.Buffer)
+
+				if payload != nil && len(payload) > 0 {
+					if contextIsDone {
+						// synchronous flushing with background context
+						log.Print("Runtime done with canceled context, performing immediate flush")
+						bgCtx := context.Background()
+						err := p.push(bgCtx, payload, 150*time.Millisecond)
+						if err != nil {
+							log.Printf("Immediate flush failed: %v", err)
+						} else {
+							log.Print("Immediate flush completed")
+						}
+					} else {
+						// normal flush path with original context
+						utils.Go("Pusher.flush", func() {
+							p.flush(ctx, payload, flushRespC)
+						})
+					}
+				}
 			}
+		case <-ctx.Done():
+			// Context is canceled (likely due to timeout)
+			log.Print("Invocation context done, checking for logs to flush")
+			if buf.Len() > 0 {
+				payload := buf.Bytes()
+				buf = new(bytes.Buffer)
+				// synchronous flushing with background context
+				bgCtx := context.Background()
+				err := p.push(bgCtx, payload, 150*time.Millisecond)
+				if err != nil {
+					log.Printf("Context done flush failed: %v", err)
+				} else {
+					log.Print("Context done flush completed")
+				}
+			}
+			// Context is refreshed on next invoke, but we don't want to exit the loop
+			ctx = context.Background() // Reset to prevent continuous triggering
 		case inv := <-p.invokeC:
 			ctx = inv.Ctx
 			doneC = inv.DoneC
@@ -179,6 +222,29 @@ func (p *Pusher) run() {
 			}
 			p.stoppedC <- struct{}{}
 			return
+		case forceFlushDoneC := <-p.forceFlushing:
+			success := false
+			if buf.Len() > 0 {
+				payload := buf.Bytes()
+				// synchronous flushing with background context
+				err := p.push(context.Background(), payload, 150*time.Millisecond)
+				if err != nil {
+					log.Printf("Force flush failed: %v", err)
+				} else {
+					log.Print("Force flush completed successfully")
+					success = true
+				}
+				buf = new(bytes.Buffer)
+			} else {
+				success = true // Consider empty buffer a success
+			}
+
+			// Signal completion
+			select {
+			case forceFlushDoneC <- success:
+			default:
+				// In case the waiting goroutine has already timed out
+			}
 		}
 	}
 }
@@ -253,4 +319,24 @@ func (p *Pusher) sendWithCaringResponseCode(req *http.Request) error {
 	}
 
 	return nil
+}
+
+func (p *Pusher) ForceFlush(ctx context.Context) bool {
+	log.Print("Force flushing logs")
+	done := make(chan bool, 1)
+
+	select {
+	case p.forceFlushing <- done:
+	case <-ctx.Done():
+		log.Print("Context done before force flush request could be sent")
+		return false
+	}
+
+	select {
+	case success := <-done:
+		return success
+	case <-ctx.Done():
+		log.Print("Force flush timed out")
+		return false
+	}
 }

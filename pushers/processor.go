@@ -51,6 +51,7 @@ type common struct {
 	LogType            lambda.EventType `json:"log_type"`
 	HostArchitecture   string           `json:"host.arch,omitempty"`
 	ProcessRuntimeName string           `json:"process.runtime.name,omitempty"`
+	Status             string           `json:"status,omitempty"`
 }
 
 type edLog struct {
@@ -364,6 +365,8 @@ func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch, p
 		requestDurations[requestID].End = timestampEnd
 	}
 
+	status, _ := content["status"].(string)
+
 	edLog := &edLog{
 		common: common{
 			Faas: &faas{
@@ -379,6 +382,7 @@ func processRuntimeDoneEvent(e *lambda.LambdaEvent, cloudObj *cloud, hostArch, p
 			Timestamp:          e.EventTime,
 			HostArchitecture:   hostArch,
 			ProcessRuntimeName: processRuntime,
+			Status:             status,
 		},
 		Message: fmt.Sprintf("END RequestID: %s", faasObj.RequestID),
 	}
