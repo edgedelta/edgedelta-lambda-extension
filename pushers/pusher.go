@@ -20,6 +20,7 @@ import (
 )
 
 const flushTimeout = 5 * time.Second
+const forceFlushTimeout = 150 * time.Millisecond
 
 var (
 	newHTTPClientFunc = func() *http.Client {
@@ -150,7 +151,7 @@ func (p *Pusher) run() {
 						// synchronous flushing with background context
 						log.Print("Runtime done with canceled context, performing immediate flush")
 						bgCtx := context.Background()
-						err := p.push(bgCtx, payload, 150*time.Millisecond)
+						err := p.push(bgCtx, payload, forceFlushTimeout)
 						if err != nil {
 							log.Printf("Immediate flush failed: %v", err)
 						} else {
@@ -172,7 +173,7 @@ func (p *Pusher) run() {
 				buf = new(bytes.Buffer)
 				// synchronous flushing with background context
 				bgCtx := context.Background()
-				err := p.push(bgCtx, payload, 150*time.Millisecond)
+				err := p.push(bgCtx, payload, forceFlushTimeout)
 				if err != nil {
 					log.Printf("Context done flush failed: %v", err)
 				} else {
@@ -227,7 +228,7 @@ func (p *Pusher) run() {
 			if buf.Len() > 0 {
 				payload := buf.Bytes()
 				// synchronous flushing with background context
-				err := p.push(context.Background(), payload, 150*time.Millisecond)
+				err := p.push(context.Background(), payload, forceFlushTimeout)
 				if err != nil {
 					log.Printf("Force flush failed: %v", err)
 				} else {
