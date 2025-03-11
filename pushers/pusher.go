@@ -231,7 +231,6 @@ func (p *Pusher) run() {
 				if err != nil {
 					log.Printf("Force flush failed: %v", err)
 				} else {
-					log.Print("Force flush completed successfully")
 					success = true
 				}
 				buf = new(bytes.Buffer)

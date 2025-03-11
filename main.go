@@ -172,9 +172,9 @@ func (w *Worker) Invoke(e *lambda.InvokeEvent) {
 		defer flushCancel()
 
 		if w.pusher.ForceFlush(flushCtx) {
-			log.Print("Successfully flushed logs on context done")
+			log.Print("Successfully flushed logs on invocation context done")
 		} else {
-			log.Print("Failed to flush logs on context done")
+			log.Print("Failed to flush logs on invocation context done")
 		}
 		return
 	case <-doneC:
