@@ -167,6 +167,15 @@ func (w *Worker) Invoke(e *lambda.InvokeEvent) {
 	select {
 	case <-ctx.Done():
 		log.Print("Invocation context is done")
+		// short timeout context for sync flushing
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer flushCancel()
+
+		if w.pusher.ForceFlush(flushCtx) {
+			log.Print("Successfully flushed logs on invocation context done")
+		} else {
+			log.Print("Failed to flush logs on invocation context done")
+		}
 		return
 	case <-doneC:
 		log.Print("Pusher is done")
