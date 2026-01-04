@@ -73,6 +73,16 @@ type Pusher struct {
 
 // NewPusher initializes Pusher
 func NewPusher(conf *cfg.Config, inC chan []byte, runtimeDoneC chan struct{}) *Pusher {
+	if conf == nil {
+		log.Printf("ERROR: NewPusher called with nil config, creating default config")
+		conf = &cfg.Config{
+			PusherMode:    cfg.HTTP_PUSHER,
+			RetryInterval: 100 * time.Millisecond,
+			PushTimeout:   5 * time.Second,
+			BufferSize:    20 * 1000 * 1000,
+		}
+	}
+
 	p := &Pusher{
 		inC:               inC,
 		runtimeDoneC:      runtimeDoneC,
@@ -84,7 +94,10 @@ func NewPusher(conf *cfg.Config, inC chan []byte, runtimeDoneC chan struct{}) *P
 		pushTimeout:       conf.PushTimeout,
 		bufferSize:        conf.BufferSize,
 	}
-	// default mode is http
+
+	log.Printf("Initializing pusher with mode: '%s' (len=%d)", conf.PusherMode, len(conf.PusherMode))
+
+	// Initialize pusher based on mode (config validation ensures valid mode)
 	switch conf.PusherMode {
 	case cfg.KINESIS_PUSHER:
 		p.name = "Kinesis-Pusher"
@@ -92,7 +105,8 @@ func NewPusher(conf *cfg.Config, inC chan []byte, runtimeDoneC chan struct{}) *P
 		p.kinesisClient = firehose.New(sess)
 		p.makeRequestFunc = p.makeKinesisRequest
 		p.endpoint = conf.KinesisEndpoint
-	case cfg.HTTP_PUSHER:
+	default:
+		// Default to HTTP mode (config validation normalizes invalid values to HTTP)
 		p.name = "HostedEnv-Pusher"
 		p.logClient = newHTTPClientFunc()
 		p.makeRequestFunc = p.makeHTTPRequest
@@ -100,6 +114,7 @@ func NewPusher(conf *cfg.Config, inC chan []byte, runtimeDoneC chan struct{}) *P
 	}
 
 	p.forceFlushing = make(chan chan bool, 1)
+	log.Printf("Pusher initialized successfully as %s with endpoint: %s", p.name, p.endpoint)
 	return p
 }
 
@@ -299,6 +314,9 @@ func (p *Pusher) makeKinesisRequest(ctx context.Context, payload []byte) error {
 }
 
 func (p *Pusher) sendWithCaringResponseCode(req *http.Request) error {
+	if p.logClient == nil {
+		return fmt.Errorf("logClient is nil - pusher not properly initialized")
+	}
 	resp, err := p.logClient.Do(req)
 	if err != nil {
 		return err
