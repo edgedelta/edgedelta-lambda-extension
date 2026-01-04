@@ -58,14 +58,6 @@ func GetConfigAndValidate() (*Config, error) {
 		config.PusherMode = HTTP_PUSHER
 	}
 
-	// Validate pusher mode is one of the valid values
-	// If invalid, default to HTTP and log warning
-	if config.PusherMode != HTTP_PUSHER && config.PusherMode != KINESIS_PUSHER {
-		multiErr = append(multiErr, fmt.Sprintf("Invalid PUSHER_MODE value: '%s' (bytes: %v). Valid values are '%s' or '%s'. Defaulting to '%s'",
-			config.PusherMode, []byte(config.PusherMode), HTTP_PUSHER, KINESIS_PUSHER, HTTP_PUSHER))
-		config.PusherMode = HTTP_PUSHER
-	}
-
 	if config.EDEndpoint == "" && config.PusherMode == HTTP_PUSHER {
 		return nil, errors.New("ED_ENDPOINT must be set as environment variable when PUSHER_MODE is set to http")
 	}
